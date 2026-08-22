@@ -338,7 +338,8 @@ enabled for that repository.
 
 This repository's own CI tests Node.js 22.12.0 and 24, runs the packaged CLI smoke
 test on macOS and Windows, validates the npm tarball, and builds and executes
-the Docker image. It contains no automatic npm publishing job.
+the Docker image. It contains no automatic npm publishing job; npm releases
+are made manually from a local interactive terminal.
 
 ## Docker
 

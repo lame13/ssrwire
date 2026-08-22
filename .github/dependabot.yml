@@ -5,6 +5,14 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    groups:
+      development-dependencies:
+        dependency-type: development
+    ignore:
+      - dependency-name: typescript
+        versions: [">=6.0.0"]
+      - dependency-name: "@types/node"
+        versions: [">=23.0.0"]
 
   - package-ecosystem: github-actions
     directory: /

@@ -1,9 +1,9 @@
 # Publish SSRWire from a local machine
 
-This repository intentionally includes no npm publishing workflow. The first
-publication should be made locally after the GitHub repository exists and its
-CI passes. That avoids a release job failing because an npm token or trusted
-publisher has not been configured yet.
+This repository intentionally includes no npm publishing workflow. Every npm
+release is published from a local interactive terminal after GitHub CI passes.
+Do not configure an `NPM_TOKEN`, trusted publisher, OIDC identity, or automated
+release workflow for npm publication.
 
 ## 1. Prepare and verify
 
@@ -12,6 +12,9 @@ From the extracted archive:
 ```bash
 unzip ssrwire.zip # skip when already inside a source checkout
 cd ssrwire
+nvm use 24
+node --version
+npm --version
 npm ci
 npm run check
 npm pack --dry-run
@@ -21,8 +24,8 @@ Install and authenticate GitHub CLI if needed:
 
 ```bash
 brew install gh
-gh auth login
-gh auth status
+gh auth login -h github.com --web
+gh auth status -h github.com
 ```
 
 ## 2. Create the Git history
@@ -54,6 +57,7 @@ gh repo create lame13/ssrwire \
 ```bash
 gh repo edit lame13/ssrwire \
   --add-topic technical-seo \
+  --add-topic seo \
   --add-topic ssr \
   --add-topic streaming-html \
   --add-topic nextjs \
@@ -85,95 +89,46 @@ Wait for the repository's `CI` workflow to pass before publishing.
 
 ## 5. Publish version 0.1.0 to npm locally
 
-Confirm that the npm account is correct and that the unscoped `ssrwire`
-package name belongs to you or is available:
+Verify the release from a clean checkout before starting npm's short-lived
+authenticated session:
 
 ```bash
-npm login
-npm whoami
+npm ci
+npm run check
+npm pack --dry-run
 npm view ssrwire
 ```
 
-`npm view` returning a 404 means the name is not currently published. Inspect
-the tarball one final time, then make the first public publication without a
-provenance request: local machines do not have the CI OIDC identity required
-for npm provenance.
+For the first release, `npm view` returning a 404 means the name is not
+currently published. Start authentication only after verification so the
+session remains fresh for publication:
 
 ```bash
-npm run check
-npm pack --dry-run
-NPM_CONFIG_PROVENANCE=false npm publish --access public
-npm view ssrwire version dist-tags repository.url
+npm login --auth-type=web --registry=https://registry.npmjs.org
+npm whoami --registry=https://registry.npmjs.org
+npm publish --access public --registry=https://registry.npmjs.org
+npm view ssrwire version dist-tags homepage keywords repository.url --json
+npm logout --registry=https://registry.npmjs.org
 ```
 
-Complete any interactive two-factor-authentication prompt from npm. Do not add
-an `NPM_TOKEN` to this repository just to make the first release work.
+Run login and publish in a foreground interactive terminal. Complete npm's
+browser, passkey, or two-factor-authentication challenge when prompted. Never
+put an OTP in a command argument, and do not add an `NPM_TOKEN` to this
+repository.
+
+If the package is not immediately visible after `npm publish` succeeds, wait
+for npm's publish-time scanning to finish instead of publishing the same
+version again.
 
 After npm confirms `0.1.0`, create the matching source release:
 
 ```bash
+node scripts/clean.mjs
+rm -rf node_modules/.vite
+git status --short
 git tag -a v0.1.0 -m "SSRWire v0.1.0"
 git push origin v0.1.0
 gh release create v0.1.0 --generate-notes --title "SSRWire v0.1.0"
 ```
 
-## 6. Optional trusted publishing for later versions
-
-Do this only after the package exists on npm and the manual release above is
-verified. Trusted publishing uses short-lived OIDC credentials, needs no
-`NPM_TOKEN`, and generates provenance automatically for public packages built
-from public repositories. See npm's current
-[trusted-publisher instructions](https://docs.npmjs.com/trusted-publishers/)
-and [provenance requirements](https://docs.npmjs.com/generating-provenance-statements/)
-before enabling it.
-
-1. Add and review a future `.github/workflows/publish.yml` workflow. Use a
-   GitHub-hosted runner, Node 24, npm 11.5.1 or newer, `id-token: write`, and
-   plain `npm publish`. Do not add `--provenance`; trusted publishing does that
-   automatically.
-2. Commit and push that workflow without creating its release trigger yet.
-3. Configure the exact repository and workflow filename in npm package
-   settings, or with a current npm CLI:
-
-```bash
-npm install --global npm@latest
-npm trust github ssrwire \
-  --repo lame13/ssrwire \
-  --file publish.yml \
-  --allow-publish
-```
-
-4. Verify the trusted-publisher settings before creating the next release.
-
-The minimum future workflow is:
-
-```yaml
-name: Publish npm package
-
-on:
-  release:
-    types: [published]
-
-permissions:
-  contents: read
-  id-token: write
-
-jobs:
-  publish:
-    if: github.repository == 'lame13/ssrwire'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-          package-manager-cache: false
-      - run: npm ci
-      - run: npm run check
-      - run: npm publish
-```
-
-Do not commit that workflow until the first local publication is complete and
-you intend to configure the matching npm trusted publisher. The workflow
-filename is part of npm's trust policy and must match exactly.
+`git status --short` must print nothing before tagging the release.
