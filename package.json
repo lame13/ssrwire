@@ -4,7 +4,7 @@
   "description": "Inspect streamed SSR HTML, metadata timing, and crawler-specific delivery from the command line.",
   "type": "module",
   "bin": {
-    "ssrwire": "./dist/cli.js"
+    "ssrwire": "./dist/bin.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -28,7 +28,7 @@
   "scripts": {
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run package:check",
-    "dev": "tsx src/cli.ts",
+    "dev": "tsx src/bin.ts",
     "format": "biome check --write .",
     "lint": "biome check .",
     "package:check": "node scripts/package-check.mjs",

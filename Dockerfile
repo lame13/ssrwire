@@ -27,5 +27,5 @@ RUN mkdir -p /work && chown node:node /work
 USER node
 WORKDIR /work
 
-ENTRYPOINT ["node", "/app/dist/cli.js"]
+ENTRYPOINT ["node", "/app/dist/bin.js"]
 CMD ["--help"]

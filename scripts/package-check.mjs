@@ -47,6 +47,7 @@ try {
   }
 
   const required = [
+    "dist/bin.js",
     "dist/cli.js",
     "dist/index.js",
     "dist/index.d.ts",
@@ -81,7 +82,7 @@ try {
   }
   run(
     node,
-    [join(installDirectory, "node_modules", "ssrwire", "dist", "cli.js"), "--version"],
+    [join(installDirectory, "node_modules", "ssrwire", "dist", "bin.js"), "--version"],
     installDirectory,
   );
 

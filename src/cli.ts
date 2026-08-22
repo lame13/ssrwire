@@ -1,8 +1,5 @@
-#!/usr/bin/env node
-
-import { access, mkdir, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 import { runAudit } from "./audit.js";
 import { ConfigError, loadConfig } from "./config.js";
@@ -207,15 +204,4 @@ export async function main(argv: readonly string[] = process.argv): Promise<void
     process.stderr.write(`SSRWire: ${message}\n`);
     process.exitCode = 2;
   }
-}
-
-const invokedPath = process.argv[1];
-if (invokedPath) {
-  let invokedUrl = pathToFileURL(resolve(invokedPath)).href;
-  try {
-    invokedUrl = pathToFileURL(await realpath(invokedPath)).href;
-  } catch {
-    // The unresolved path still supports direct source execution when realpath is unavailable.
-  }
-  if (import.meta.url === invokedUrl) await main();
 }
