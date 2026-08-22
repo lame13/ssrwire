@@ -1,6 +1,7 @@
 # SSRWire
 
 [![CI](https://github.com/lame13/ssrwire/actions/workflows/ci.yml/badge.svg)](https://github.com/lame13/ssrwire/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/ssrwire.svg)](https://www.npmjs.com/package/ssrwire)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Inspect streamed SSR HTML, metadata timing, and crawler-specific delivery from
