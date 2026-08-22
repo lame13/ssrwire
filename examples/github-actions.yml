@@ -1,0 +1,73 @@
+name: SSRWire
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Run SSRWire (pull request, no credentials)
+        id: ssrwire_pr
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: >-
+          npx --yes ssrwire@0.1.0 check
+          --config ssrwire.config.yml
+          --format sarif
+          --output reports/ssrwire.sarif
+          --fail-on error
+
+      - name: Run SSRWire (trusted branch)
+        id: ssrwire_trusted
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: >-
+          npx --yes ssrwire@0.1.0 check
+          --config ssrwire.config.yml
+          --format sarif
+          --output reports/ssrwire.sarif
+          --fail-on error
+        env:
+          PREVIEW_TOKEN: ${{ secrets.PREVIEW_TOKEN }}
+
+      - name: Upload SARIF
+        if: >-
+          always() &&
+          hashFiles('reports/ssrwire.sarif') != '' &&
+          github.event.repository.visibility == 'public' &&
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: reports/ssrwire.sarif
+
+      - name: Keep the report as a workflow artifact
+        if: always() && hashFiles('reports/ssrwire.sarif') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ssrwire-sarif
+          path: reports/ssrwire.sarif
+          retention-days: 14
+
+      - name: Enforce SSRWire result
+        if: >-
+          always() &&
+          (steps.ssrwire_pr.outcome == 'failure' ||
+          steps.ssrwire_trusted.outcome == 'failure')
+        run: exit 1
