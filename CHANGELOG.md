@@ -5,6 +5,10 @@ All notable changes to SSRWire are documented here. The project follows
 
 ## [Unreleased]
 
+### Changed
+
+- Added an npm package badge to the README.
+
 ## [0.1.0] - 2026-08-22
 
 ### Added
