@@ -97,6 +97,8 @@ export interface ProbeResult {
   readonly signals: DocumentSignals;
   readonly completion: ProbeCompletion;
   readonly error?: string;
+  /** One-based audit sample number. Low-level probeUrl() calls leave this unset. */
+  readonly sample?: number;
 }
 
 export interface TargetExpectations {
@@ -123,6 +125,43 @@ export interface SsrWireConfig {
   readonly timeoutMs: number;
   readonly maxBytes: number;
   readonly maxRedirects: number;
+  /** Total samples per target and agent. Defaults to one for programmatic callers. */
+  readonly repeat?: number;
+}
+
+export interface TimingStats {
+  readonly samples: number;
+  readonly minMs: number;
+  readonly medianMs: number;
+  readonly p95Ms: number;
+  readonly maxMs: number;
+  readonly spreadMs: number;
+}
+
+export interface StabilityTimings {
+  readonly headers?: TimingStats;
+  readonly firstByte?: TimingStats;
+  readonly criticalSignals?: TimingStats;
+  readonly complete?: TimingStats;
+}
+
+export interface StabilityVariants {
+  readonly completion: number;
+  readonly status: number;
+  readonly finalUrl: number;
+  readonly redirectChain: number;
+  readonly bodySha256: number;
+  readonly metadataValues: number;
+  readonly metadataLocations: number;
+}
+
+export interface AgentStability {
+  readonly agent: AgentProfile;
+  readonly samples: number;
+  readonly complete: number;
+  readonly incomplete: number;
+  readonly timings: StabilityTimings;
+  readonly variants: StabilityVariants;
 }
 
 export interface Finding {
@@ -138,6 +177,7 @@ export interface TargetAuditResult {
   readonly target: AuditTarget;
   readonly probes: readonly ProbeResult[];
   readonly findings: readonly Finding[];
+  readonly stability?: readonly AgentStability[];
 }
 
 export interface AuditSummary {
@@ -153,6 +193,7 @@ export interface AuditResult {
   readonly version: string;
   readonly generatedAt: string;
   readonly durationMs: number;
+  readonly repeat?: number;
   readonly results: readonly TargetAuditResult[];
   readonly summary: AuditSummary;
 }

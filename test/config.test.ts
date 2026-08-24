@@ -53,6 +53,7 @@ timeoutMs: 5000
       "Bearer secret-value",
     );
     expect(config.timeoutMs).toBe(5000);
+    expect(config.repeat).toBe(1);
   });
 
   it("rejects unknown configuration keys", async () => {
@@ -120,5 +121,22 @@ timeoutMs: 5000
     );
     expect(() => parseHeaderOption("Host: attacker.example")).toThrow(/managed/);
     expect(() => parseHeaderOption("Broken header")).toThrow(/form/);
+  });
+
+  it("loads repeat and lets the command line override it", async () => {
+    const cwd = await temporaryDirectory();
+    await writeFile(join(cwd, "ssrwire.config.yml"), "targets: [https://example.com]\nrepeat: 3\n");
+
+    expect((await loadConfig({ cwd })).repeat).toBe(3);
+    expect((await loadConfig({ cwd, repeat: 2 })).repeat).toBe(2);
+  });
+
+  it("rejects repeat counts outside the bounded sampling range", async () => {
+    await expect(loadConfig({ urls: ["https://example.com"], repeat: 0 })).rejects.toThrow(
+      "repeat must be an integer between 1 and 10",
+    );
+    await expect(loadConfig({ urls: ["https://example.com"], repeat: 11 })).rejects.toThrow(
+      "repeat must be an integer between 1 and 10",
+    );
   });
 });

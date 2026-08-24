@@ -14,6 +14,7 @@ interface CliOptions {
   readonly timeout?: number;
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
+  readonly repeat?: number;
   readonly format: ReportFormat;
   readonly output?: string;
   readonly failOn: "error" | "warning" | "never";
@@ -40,6 +41,7 @@ agents:
 timeoutMs: 15000
 maxBytes: 10485760
 maxRedirects: 10
+repeat: 1
 
 # Keep preview credentials in environment variables. SSRWire redacts configured values from reports.
 # headers:
@@ -80,6 +82,7 @@ function addCheckOptions(command: Command): Command {
     .option("--timeout <ms>", "request timeout in milliseconds", parseInteger)
     .option("--max-bytes <bytes>", "maximum response bytes", parseInteger)
     .option("--max-redirects <count>", "maximum redirects", parseInteger)
+    .option("--repeat <count>", "sequential samples per URL and agent", parseInteger)
     .option("-f, --format <format>", "terminal, json, or sarif", parseFormat, "terminal")
     .option("-o, --output <path>", "write the report to a file")
     .option("--fail-on <level>", "error, warning, or never", parseFailOn, "error")
@@ -124,6 +127,7 @@ async function check(urls: readonly string[], options: CliOptions): Promise<void
     ...(options.timeout === undefined ? {} : { timeoutMs: options.timeout }),
     ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
     ...(options.maxRedirects === undefined ? {} : { maxRedirects: options.maxRedirects }),
+    ...(options.repeat === undefined ? {} : { repeat: options.repeat }),
   });
   const audit = await runAudit(config);
   const color =

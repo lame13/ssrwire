@@ -108,4 +108,100 @@ describe("CLI", () => {
     expect(stderr).toContain("Expected an integer");
     expect(process.exitCode).toBe(2);
   });
+
+  it("runs the requested number of sequential samples", async () => {
+    const url = await serveHealthyPage();
+
+    await main(["node", "ssrwire", url, "--agent", "browser", "--repeat", "3", "--format", "json"]);
+
+    const report = JSON.parse(stdout) as {
+      repeat: number;
+      summary: { probes: number };
+      results: Array<{ probes: Array<{ sample: number }> }>;
+    };
+    expect(report.repeat).toBe(3);
+    expect(report.summary.probes).toBe(3);
+    expect(report.results[0]?.probes.map((probe) => probe.sample)).toEqual([1, 2, 3]);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("does not fail on informational body drift but honors warning policy", async () => {
+    let request = 0;
+    let varyTitle = false;
+    server = createServer((incoming, response) => {
+      request += 1;
+      const origin = `http://${incoming.headers.host}`;
+      const title = varyTitle ? `SSRWire fixture ${request}` : "SSRWire fixture";
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(`<!doctype html>
+        <html><head>
+          <title>${title}</title>
+          <meta name="description" content="A complete fixture">
+          <link rel="canonical" href="${origin}/page">
+        </head><body><main><h1>Fixture heading</h1><p>Useful main content.</p></main>
+        <!-- sample ${request} --></body></html>`);
+    });
+    await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Fixture server did not bind.");
+    const url = `http://127.0.0.1:${address.port}/page`;
+
+    await main([
+      "node",
+      "ssrwire",
+      url,
+      "--agent",
+      "browser",
+      "--repeat",
+      "2",
+      "--format",
+      "json",
+      "--fail-on",
+      "warning",
+    ]);
+
+    const informational = JSON.parse(stdout) as {
+      results: Array<{ findings: Array<{ code: string; severity: string }> }>;
+    };
+    expect(informational.results[0]?.findings).toContainEqual(
+      expect.objectContaining({ code: "stream-instability", severity: "info" }),
+    );
+    expect(process.exitCode ?? 0).toBe(0);
+
+    stdout = "";
+    stderr = "";
+    process.exitCode = undefined;
+    request = 0;
+    varyTitle = true;
+
+    await main([
+      "node",
+      "ssrwire",
+      url,
+      "--agent",
+      "browser",
+      "--repeat",
+      "2",
+      "--format",
+      "json",
+      "--fail-on",
+      "warning",
+    ]);
+
+    const warning = JSON.parse(stdout) as {
+      results: Array<{ findings: Array<{ code: string; severity: string }> }>;
+    };
+    expect(warning.results[0]?.findings).toContainEqual(
+      expect.objectContaining({ code: "stream-instability", severity: "warning" }),
+    );
+    expect(stderr).toBe("");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("rejects an out-of-range repeat count", async () => {
+    await main(["node", "ssrwire", "https://example.com", "--repeat", "11"]);
+
+    expect(stderr).toContain("repeat must be an integer between 1 and 10");
+    expect(process.exitCode).toBe(2);
+  });
 });

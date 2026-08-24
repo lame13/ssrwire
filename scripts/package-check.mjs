@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 const node = process.execPath;
 const npmCli = process.env.npm_execpath;
+const expectedVersion = "0.2.0";
 
 if (!npmCli) {
   throw new Error("npm_execpath is unavailable. Run this check with npm run package:check.");
@@ -45,13 +46,19 @@ try {
   ) {
     throw new Error("npm pack returned an unexpected result.");
   }
+  if (item.version !== expectedVersion) {
+    throw new Error(`Expected package version ${expectedVersion}, received ${item.version}.`);
+  }
 
   const required = [
     "dist/bin.js",
     "dist/cli.js",
     "dist/index.js",
     "dist/index.d.ts",
+    "dist/stability.js",
+    "dist/stability.d.ts",
     "src/index.ts",
+    "src/stability.ts",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
@@ -61,6 +68,18 @@ try {
   const missing = required.filter((file) => !names.has(file));
   if (missing.length > 0) {
     throw new Error(`Package is missing required files: ${missing.join(", ")}`);
+  }
+  const forbidden = [...names].filter(
+    (name) =>
+      name === ".env" ||
+      name.startsWith(".github/") ||
+      name.startsWith("node_modules/") ||
+      name.startsWith("test/") ||
+      name.endsWith(".tgz") ||
+      name.endsWith(".zip"),
+  );
+  if (forbidden.length > 0) {
+    throw new Error(`Package contains forbidden files: ${forbidden.join(", ")}`);
   }
 
   const installDirectory = join(temporary, "install");
@@ -75,9 +94,16 @@ try {
   if (!helpOutput.includes("Inspect streamed SSR HTML")) {
     throw new Error("Installed CLI did not render its help output.");
   }
+  if (!helpOutput.includes("--repeat <count>")) {
+    throw new Error("Installed CLI did not expose repeat sampling.");
+  }
   runNpm(["exec", "--", "ssrwire", "init", "smoke.config.yml"], installDirectory);
   const initialized = await readFile(join(installDirectory, "smoke.config.yml"), "utf8");
-  if (!initialized.includes("targets:") || !initialized.includes("agents:")) {
+  if (
+    !initialized.includes("targets:") ||
+    !initialized.includes("agents:") ||
+    !initialized.includes("repeat: 1")
+  ) {
     throw new Error("Installed CLI did not create a valid starter configuration.");
   }
   run(

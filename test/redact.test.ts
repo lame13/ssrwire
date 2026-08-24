@@ -79,7 +79,7 @@ describe("redactProbe", () => {
     const secret = "preview-token-987";
     const probe = fixture();
     const audit: AuditResult = {
-      version: "0.1.0",
+      version: "0.2.0",
       generatedAt: "2026-08-22T00:00:00.000Z",
       durationMs: 1,
       results: [
@@ -96,6 +96,24 @@ describe("redactProbe", () => {
             },
           },
           probes: [probe],
+          stability: [
+            {
+              agent: probe.agent,
+              samples: 2,
+              complete: 2,
+              incomplete: 0,
+              timings: {},
+              variants: {
+                completion: 1,
+                status: 1,
+                finalUrl: 1,
+                redirectChain: 1,
+                bodySha256: 1,
+                metadataValues: 1,
+                metadataLocations: 1,
+              },
+            },
+          ],
           findings: [
             {
               code: "reflected-value",
@@ -117,7 +135,7 @@ describe("redactProbe", () => {
   it("preserves typed control fields when a header value matches an enum", () => {
     const probe = fixture();
     const audit: AuditResult = {
-      version: "0.1.0",
+      version: "0.2.0",
       generatedAt: "2026-08-22T00:00:00.000Z",
       durationMs: 1,
       results: [
@@ -134,6 +152,24 @@ describe("redactProbe", () => {
             },
           },
           probes: [probe],
+          stability: [
+            {
+              agent: probe.agent,
+              samples: 2,
+              complete: 2,
+              incomplete: 0,
+              timings: {},
+              variants: {
+                completion: 1,
+                status: 1,
+                finalUrl: 1,
+                redirectChain: 1,
+                bodySha256: 1,
+                metadataValues: 1,
+                metadataLocations: 1,
+              },
+            },
+          ],
           findings: [
             {
               code: "sample-error",
@@ -151,6 +187,7 @@ describe("redactProbe", () => {
     const redacted = redactAudit(audit, ["complete", "error", "browser"]);
     expect(redacted.results[0]?.probes[0]?.completion).toBe("complete");
     expect(redacted.results[0]?.probes[0]?.agent.key).toBe("browser");
+    expect(redacted.results[0]?.stability?.[0]?.agent.key).toBe("browser");
     expect(redacted.results[0]?.findings[0]?.severity).toBe("error");
     expect(redacted.results[0]?.findings[0]?.code).toBe("sample-error");
     expect(redacted.summary.errors).toBe(1);
