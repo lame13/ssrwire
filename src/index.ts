@@ -8,6 +8,7 @@ export { renderJson, renderReport, renderSarif, renderTerminal } from "./reporte
 export { createStreamInspector } from "./stream-parser.js";
 export type {
   AgentProfile,
+  AgentStability,
   AuditResult,
   AuditSummary,
   AuditTarget,
@@ -27,8 +28,11 @@ export type {
   RobotsSignal,
   Severity,
   SsrWireConfig,
+  StabilityTimings,
+  StabilityVariants,
   TargetAuditResult,
   TargetExpectations,
   TimingMark,
+  TimingStats,
 } from "./types.js";
 export { VERSION } from "./version.js";

@@ -160,6 +160,18 @@ export function redactAudit(audit: AuditResult, secrets: readonly string[]): Aud
         },
       },
       probes: result.probes.map((probe) => redactProbeWithPlan(probe, plan)),
+      ...(result.stability === undefined
+        ? {}
+        : {
+            stability: result.stability.map((summary) => ({
+              ...summary,
+              agent: {
+                ...summary.agent,
+                label: redactText(summary.agent.label, plan),
+                userAgent: redactText(summary.agent.userAgent, plan),
+              },
+            })),
+          }),
       findings: result.findings.map((finding) => ({
         ...finding,
         message: redactText(finding.message, plan),

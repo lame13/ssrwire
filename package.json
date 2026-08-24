@@ -1,6 +1,6 @@
 {
   "name": "ssrwire",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Inspect streamed SSR HTML, metadata timing, and crawler-specific delivery from the command line.",
   "type": "module",
   "bin": {

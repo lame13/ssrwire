@@ -8,6 +8,7 @@ import type { AgentProfile, AuditTarget, SsrWireConfig, TargetExpectations } fro
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_REDIRECTS = 10;
+const DEFAULT_REPEAT = 1;
 const DEFAULT_AGENTS = ["browser", "googlebot", "bingbot", "twitterbot"] as const;
 const DEFAULT_CONFIG_FILES = [
   "ssrwire.config.yml",
@@ -66,6 +67,7 @@ const fileConfigSchema = z
       .max(50 * 1024 * 1024)
       .optional(),
     maxRedirects: z.number().int().min(0).max(20).optional(),
+    repeat: z.number().int().min(1).max(10).optional(),
   })
   .strict();
 
@@ -79,6 +81,7 @@ export interface LoadConfigOptions {
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
+  readonly repeat?: number;
   readonly cwd?: string;
 }
 
@@ -291,6 +294,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
   const timeoutMs = options.timeoutMs ?? file.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBytes = options.maxBytes ?? file.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxRedirects = options.maxRedirects ?? file.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+  const repeat = options.repeat ?? file.repeat ?? DEFAULT_REPEAT;
 
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 120_000) {
     throw new ConfigError("timeoutMs must be an integer between 100 and 120000.");
@@ -301,6 +305,9 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
   if (!Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 20) {
     throw new ConfigError("maxRedirects must be an integer between 0 and 20.");
   }
+  if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) {
+    throw new ConfigError("repeat must be an integer between 1 and 10.");
+  }
 
   return {
     targets,
@@ -309,5 +316,6 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
     timeoutMs,
     maxBytes,
     maxRedirects,
+    repeat,
   };
 }

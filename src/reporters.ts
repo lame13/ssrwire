@@ -1,4 +1,5 @@
 import type {
+  AgentStability,
   AuditResult,
   ElementSignal,
   Finding,
@@ -70,8 +71,9 @@ function firstSignal(signals: readonly ElementSignal[]): ElementSignal | undefin
   return signals.find((signal) => signal.value.trim().length > 0) ?? signals[0];
 }
 
-function probeRow(probe: ProbeResult): readonly string[] {
+function probeRow(probe: ProbeResult, showSample: boolean): readonly string[] {
   return [
+    ...(showSample ? [String(probe.sample ?? "—")] : []),
     truncate(probe.agent.label, 24),
     probe.status === undefined ? "—" : String(probe.status),
     probe.completion,
@@ -82,6 +84,34 @@ function probeRow(probe: ProbeResult): readonly string[] {
     formatSignal(firstSignal(probe.signals.canonicals)),
     formatSignal(probe.signals.firstMainText),
   ];
+}
+
+function stabilityRows(stability: readonly AgentStability[]): readonly (readonly string[])[] {
+  const labels: Readonly<Record<keyof AgentStability["timings"], string>> = {
+    headers: "Headers",
+    firstByte: "First byte",
+    criticalSignals: "Critical signals",
+    complete: "Complete",
+  };
+  const rows: string[][] = [];
+  for (const summary of stability) {
+    for (const key of ["headers", "firstByte", "criticalSignals", "complete"] as const) {
+      const stats = summary.timings[key];
+      if (stats === undefined) continue;
+      rows.push([
+        truncate(summary.agent.label, 24),
+        `${summary.complete}/${summary.samples}`,
+        labels[key],
+        String(stats.samples),
+        formatMs(stats.minMs),
+        formatMs(stats.medianMs),
+        formatMs(stats.p95Ms),
+        formatMs(stats.maxMs),
+        formatMs(stats.spreadMs),
+      ]);
+    }
+  }
+  return rows;
 }
 
 function renderTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
@@ -116,12 +146,17 @@ export function renderTerminal(audit: AuditResult, options: ReporterOptions = {}
     paint(`SSRWire ${audit.version}`, ANSI.bold, color),
     paint(`Generated ${audit.generatedAt} in ${formatMs(audit.durationMs)}`, ANSI.dim, color),
   ];
+  if ((audit.repeat ?? 1) > 1) {
+    lines.push(paint(`${audit.repeat} sequential samples per URL and agent`, ANSI.dim, color));
+  }
 
   for (const result of audit.results) {
+    const showSample = (audit.repeat ?? 1) > 1;
     lines.push("", paint(terminalSafe(result.target.url), ANSI.bold, color));
     lines.push(
       renderTable(
         [
+          ...(showSample ? ["Sample"] : []),
           "Agent",
           "HTTP",
           "Result",
@@ -132,9 +167,23 @@ export function renderTerminal(audit: AuditResult, options: ReporterOptions = {}
           "Canonical",
           "Main",
         ],
-        result.probes.map(probeRow),
+        result.probes.map((probe) => probeRow(probe, showSample)),
       ),
     );
+
+    if (result.stability !== undefined) {
+      const rows = stabilityRows(result.stability);
+      if (rows.length > 0) {
+        lines.push(
+          "",
+          "Stability timings (nearest-rank p95)",
+          renderTable(
+            ["Agent", "Complete", "Metric", "N", "Min", "Median", "P95", "Max", "Spread"],
+            rows,
+          ),
+        );
+      }
+    }
 
     if (result.findings.length === 0) {
       lines.push("Findings: none");
