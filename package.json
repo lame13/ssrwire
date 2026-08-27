@@ -1,7 +1,7 @@
 {
   "name": "ssrwire",
-  "version": "0.2.0",
-  "description": "Inspect streamed SSR HTML, metadata timing, and crawler-specific delivery from the command line.",
+  "version": "0.3.0",
+  "description": "Inspect streamed SSR HTML, SEO and social metadata timing, and crawler-specific delivery from the command line.",
   "type": "module",
   "bin": {
     "ssrwire": "./dist/bin.js"
@@ -52,6 +52,9 @@
     "cli",
     "typescript",
     "seo-tools",
+    "open-graph",
+    "social-preview",
+    "twitter-cards",
     "github-actions",
     "sarif"
   ],

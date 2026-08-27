@@ -1,3 +1,12 @@
+import {
+  effectiveTwitterCardSignal,
+  firstSocialSignal,
+  normalizeSocialValue,
+  OPEN_GRAPH_PROPERTIES,
+  OPEN_GRAPH_REQUIRED_PROPERTIES,
+  socialSignals,
+  TWITTER_CARD_REQUIRED_FIELDS,
+} from "./social.js";
 import type {
   AgentProfile,
   AgentStability,
@@ -7,6 +16,7 @@ import type {
   ProbeResult,
   RobotsAudience,
   RobotsSignal,
+  SocialMetadataProperty,
   TimingStats,
 } from "./types.js";
 
@@ -23,6 +33,11 @@ const ROBOTS_OPPOSITES = [
 export interface StabilityAnalysis {
   readonly stability: readonly AgentStability[];
   readonly findings: readonly Finding[];
+}
+
+interface SocialSignature {
+  openGraph?: unknown;
+  twitterCard?: unknown;
 }
 
 function normalizeText(value: string): string {
@@ -117,8 +132,97 @@ function robotsValueLocations(probe: ProbeResult): readonly (readonly [string, s
   );
 }
 
-function metadataValueSignature(probe: ProbeResult): string {
+function socialValuesForSignature(
+  probe: ProbeResult,
+  property: SocialMetadataProperty,
+): readonly string[] {
+  const values = [
+    ...new Set(
+      socialSignals(probe.signals, property)
+        .map((signal) => normalizeSocialValue(property, signal.value, probe.finalUrl))
+        .filter((value) => value.length > 0),
+    ),
+  ];
+  return property === "og:image" ? values : values.sort();
+}
+
+function socialLocationsForSignature(
+  probe: ProbeResult,
+  property: SocialMetadataProperty,
+): readonly (readonly [string, string])[] {
+  if (property !== "og:image") {
+    return signalValueLocations(socialSignals(probe.signals, property), (value) =>
+      normalizeSocialValue(property, value, probe.finalUrl),
+    );
+  }
+  return socialSignals(probe.signals, property)
+    .map(
+      (signal) =>
+        [normalizeSocialValue(property, signal.value, probe.finalUrl), signal.location] as const,
+    )
+    .filter(([value]) => value.length > 0);
+}
+
+function socialValueSignature(target: AuditTarget, probe: ProbeResult): unknown {
+  const signature: SocialSignature = {};
+  if (target.expectations.requireOpenGraph === true) {
+    signature.openGraph = Object.fromEntries(
+      OPEN_GRAPH_PROPERTIES.map((property) => [
+        property,
+        socialValuesForSignature(probe, property),
+      ]),
+    );
+  }
+  if (target.expectations.requireTwitterCard === true) {
+    signature.twitterCard = Object.fromEntries(
+      TWITTER_CARD_REQUIRED_FIELDS.map((field) => {
+        const signal = effectiveTwitterCardSignal(probe.signals, field);
+        return [
+          field,
+          signal === undefined
+            ? "<missing>"
+            : normalizeSocialValue(signal.property, signal.value, probe.finalUrl) || "<missing>",
+        ];
+      }),
+    );
+  }
+  return Object.keys(signature).length === 0 ? undefined : signature;
+}
+
+function socialLocationSignature(target: AuditTarget, probe: ProbeResult): unknown {
+  const signature: SocialSignature = {};
+  if (target.expectations.requireOpenGraph === true) {
+    signature.openGraph = Object.fromEntries(
+      OPEN_GRAPH_PROPERTIES.map((property) => [
+        property,
+        socialLocationsForSignature(probe, property),
+      ]),
+    );
+  }
+  if (target.expectations.requireTwitterCard === true) {
+    signature.twitterCard = Object.fromEntries(
+      TWITTER_CARD_REQUIRED_FIELDS.map((field) => {
+        const signal = effectiveTwitterCardSignal(probe.signals, field);
+        return [
+          field,
+          signal === undefined
+            ? []
+            : [
+                [
+                  normalizeSocialValue(signal.property, signal.value, probe.finalUrl),
+                  signal.location,
+                ],
+              ],
+        ];
+      }),
+    );
+  }
+  return Object.keys(signature).length === 0 ? undefined : signature;
+}
+
+function metadataValueSignature(target: AuditTarget, probe: ProbeResult): string {
   const titles = probe.signals.titles ?? (probe.signals.title ? [probe.signals.title] : []);
+  const social = socialValueSignature(target, probe);
   return JSON.stringify({
     title: normalizedSignalValues(titles),
     description: normalizedSignalValues(probe.signals.descriptions),
@@ -126,11 +230,13 @@ function metadataValueSignature(probe: ProbeResult): string {
       normalizeCanonical(value, probe.finalUrl),
     ),
     robots: effectiveRobotsValue(probe),
+    ...(social === undefined ? {} : { social }),
   });
 }
 
-function metadataLocationSignature(probe: ProbeResult): string {
+function metadataLocationSignature(target: AuditTarget, probe: ProbeResult): string {
   const titles = probe.signals.titles ?? (probe.signals.title ? [probe.signals.title] : []);
+  const social = socialLocationSignature(target, probe);
   return JSON.stringify({
     title: signalValueLocations(titles),
     description: signalValueLocations(probe.signals.descriptions),
@@ -138,6 +244,7 @@ function metadataLocationSignature(probe: ProbeResult): string {
       normalizeCanonical(value, probe.finalUrl),
     ),
     robots: robotsValueLocations(probe),
+    ...(social === undefined ? {} : { social }),
   });
 }
 
@@ -213,6 +320,16 @@ export function criticalSignalsArrivalMs(
   }
   if (expectations.requireH1 && !addRequired(firstNonEmpty(probe.signals.h1s))) return undefined;
   if (expectations.requireMainText && !addRequired(probe.signals.firstMainText)) return undefined;
+  if (expectations.requireOpenGraph === true) {
+    for (const property of OPEN_GRAPH_REQUIRED_PROPERTIES) {
+      if (!addRequired(firstSocialSignal(probe.signals, property))) return undefined;
+    }
+  }
+  if (expectations.requireTwitterCard === true) {
+    for (const field of TWITTER_CARD_REQUIRED_FIELDS) {
+      if (!addRequired(effectiveTwitterCardSignal(probe.signals, field))) return undefined;
+    }
+  }
 
   return required === 0 ? undefined : Math.max(...marks);
 }
@@ -275,8 +392,10 @@ function summarizeAgent(target: AuditTarget, probes: readonly ProbeResult[]): Ag
       finalUrl: uniqueCount(finalResponses.map((probe) => normalizeUrl(probe.finalUrl))),
       redirectChain: uniqueCount(probes.map(redirectChainSignature)),
       bodySha256: uniqueCount(complete.map((probe) => probe.bodySha256 ?? "<missing>")),
-      metadataValues: uniqueCount(complete.map(metadataValueSignature)),
-      metadataLocations: uniqueCount(complete.map(metadataLocationSignature)),
+      metadataValues: uniqueCount(complete.map((probe) => metadataValueSignature(target, probe))),
+      metadataLocations: uniqueCount(
+        complete.map((probe) => metadataLocationSignature(target, probe)),
+      ),
     },
   };
 }

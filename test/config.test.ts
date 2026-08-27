@@ -32,6 +32,8 @@ describe("loadConfig", () => {
     expectedStatus: [200, 404, 200]
     require:
       description: false
+      openGraph: true
+      twitterCard: true
 agents:
   - browser
   - key: social-preview
@@ -48,6 +50,8 @@ timeoutMs: 5000
     expect(config.targets[0]?.url).toBe("https://example.com/path");
     expect(config.targets[0]?.expectations.statuses).toEqual([200, 404]);
     expect(config.targets[0]?.expectations.requireDescription).toBe(false);
+    expect(config.targets[0]?.expectations.requireOpenGraph).toBe(true);
+    expect(config.targets[0]?.expectations.requireTwitterCard).toBe(true);
     expect(config.agents.map((agent) => agent.key)).toEqual(["browser", "social-preview"]);
     expect(new Map(Object.entries(config.headers)).get("authorization")).toBe(
       "Bearer secret-value",
@@ -109,6 +113,10 @@ timeoutMs: 5000
       "https://example.com/a",
       "https://example.com/b",
     ]);
+    expect(config.targets[1]?.expectations).toMatchObject({
+      requireOpenGraph: false,
+      requireTwitterCard: false,
+    });
   });
 
   it("rejects transport headers managed by the probe", () => {

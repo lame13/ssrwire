@@ -4,14 +4,14 @@
 [![npm version](https://img.shields.io/npm/v/ssrwire.svg)](https://www.npmjs.com/package/ssrwire)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Inspect streamed SSR HTML, metadata timing, and crawler-specific delivery from
-the command line.
+Inspect streamed SSR HTML, SEO and social metadata timing, and crawler-specific
+delivery from the command line.
 
 SSRWire makes a real HTTP request for each selected user-agent profile, reads
-the response incrementally, and records when important SEO signals become
-observable to its parser. It reports their elapsed time, observed byte
-position, and document location without launching a browser or executing
-JavaScript.
+the response incrementally, and records when important SEO and social-preview
+signals become observable to its parser. It reports their elapsed time,
+observed byte position, and document location without launching a browser or
+executing JavaScript.
 
 ```bash
 npx ssrwire https://example.com/product
@@ -25,7 +25,8 @@ Modern SSR output is not always one complete HTML document delivered at once:
 - a framework may intentionally stream metadata into `<body>` for a capable
   crawler while blocking for an HTML-limited bot;
 - browser, search-crawler, and social-crawler user agents may receive different
-  titles, canonicals, robots directives, redirects, or statuses;
+  titles, canonicals, social-preview metadata, robots directives, redirects, or
+  statuses;
 - the same URL and user agent may receive inconsistent SSR output between requests;
 - an interrupted or oversized stream may never deliver the expected elements;
 - a working hydrated page can hide thin or incomplete source HTML.
@@ -91,8 +92,8 @@ For each target, agent, and configured sample, SSRWire captures:
 - response status, final URL, redirect chain, and an allowlisted response-header snapshot;
 - time to response headers, first response-body bytes, and completed body;
 - total bytes delivered to the stream parser and a body fingerprint;
-- title, meta description, canonical, meta robots, H1, first main-content
-  text, and JSON-LD blocks;
+- title, meta description, canonical, meta robots, Open Graph, Twitter Card,
+  H1, first main-content text, and JSON-LD blocks;
 - elapsed arrival time, observed byte position, and `head`/`body` location for
   each signal;
 - clean completion, timeout, network failure, invalid response, or configured
@@ -107,10 +108,12 @@ It then checks:
 | Missing title | Error |
 | Missing description, canonical, H1, or main text | Warning |
 | Duplicate or conflicting title, description, canonical, or robots values | Warning |
+| Missing an enabled Open Graph or Twitter Card contract | Warning |
+| Invalid social metadata URL or conflicting scalar social metadata | Warning |
 | Invalid JSON-LD | Warning |
 | JSON-LD block/count exceeds the bounded analysis budget | Warning |
-| Critical metadata in `<body>` for a profile that requires head metadata | Error |
-| Status, final URL, title, canonical, or robots drift between profiles | Warning |
+| Critical or enabled social metadata in `<body>` for a profile that requires head metadata | Error |
+| Status, final URL, title, canonical, robots, or enabled social metadata drift between profiles | Warning |
 | Completion, status, final URL, or redirect-chain drift between samples | Warning |
 | Metadata value or document-location drift between complete samples | Warning |
 | Exact body fingerprint drift without metadata drift | Information |
@@ -162,6 +165,41 @@ agents:
     requiresHeadMetadata: true
 ```
 
+## Social preview metadata
+
+Every probe captures these bounded, ordered metadata signals when they arrive
+before completion or termination:
+
+- Open Graph: `og:title`, `og:type`, `og:url`, `og:image`, and
+  `og:description`;
+- Twitter Card: `twitter:card`, `twitter:title`, `twitter:description`, and
+  `twitter:image`.
+
+SSRWire accepts either the conventional `property` attribute or a `name`
+attribute for those keys. Each captured value carries the same arrival time,
+observed byte position, and document location as the existing metadata
+signals. The terminal report shows a compact readiness table whenever social
+metadata is observed or required, while JSON retains every captured value.
+
+Social policy is opt-in per target. `openGraph: true` requires the four basic
+[Open Graph protocol](https://ogp.me/) properties: title, type, URL, and image.
+The `twitterCard: true` option requires `twitter:card` plus a usable title,
+description, and image; SSRWire prefers the corresponding `twitter:*` value
+and falls back to `og:title`, `og:description`, or `og:image`. These are
+explicit SSRWire audit contracts, not a claim that a social platform will
+render a particular preview.
+
+Enabled contracts also participate in critical-signal timing, head/body
+policy, cross-agent drift, and repeated-sample stability checks. URL-valued
+fields must be absolute HTTP or HTTPS URLs. Open Graph permits multiple images,
+so SSRWire retains them in order without treating the array as a scalar
+conflict; the first non-empty image satisfies readiness.
+
+When both options are false, SSRWire still records and reports raw social
+signals but emits no social-policy or social-drift findings. It does not fetch
+images, verify dimensions or media types, execute JavaScript, or simulate a
+platform's rendered preview.
+
 ## Configuration
 
 SSRWire automatically looks for `ssrwire.config.yml`,
@@ -179,6 +217,8 @@ targets:
       canonical: true
       h1: true
       mainText: true
+      openGraph: true
+      twitterCard: true
     maxFirstByteMs: 1200
     maxCriticalMs: 2500
 
@@ -190,6 +230,8 @@ targets:
       canonical: false
       h1: true
       mainText: true
+      openGraph: false
+      twitterCard: false
 
 agents:
   - browser
@@ -218,6 +260,7 @@ Defaults:
 
 - expected status: `200`;
 - title, description, canonical, H1, and main text: required;
+- Open Graph and Twitter Card contracts: disabled;
 - agents: `browser`, `googlebot`, `bingbot`, and `twitterbot`;
 - timeout: 15 seconds per probe;
 - response limit: 10 MiB;
@@ -262,11 +305,11 @@ The final response must declare `text/html` or `application/xhtml+xml` as its
 sniff headerless, JSON, text, or binary responses for HTML-looking fragments.
 
 To keep hostile or accidentally huge pages bounded, SSRWire retains at most
-256 signals of each repeated metadata kind, analyzes at most 64 JSON-LD blocks,
-and captures at most 1,048,576 characters from one JSON-LD block. Exceeding a
-JSON-LD analysis budget produces a dedicated warning rather than being
-mislabeled as invalid JSON. The configured response-byte limit remains the
-outer bound.
+256 signals of each repeated metadata kind, including each supported social
+property, analyzes at most 64 JSON-LD blocks, and captures at most 1,048,576
+characters from one JSON-LD block. Exceeding a JSON-LD analysis budget produces
+a dedicated warning rather than being mislabeled as invalid JSON. The
+configured response-byte limit remains the outer bound.
 
 ## Timing interpretation
 
@@ -311,9 +354,11 @@ the maximum.
 
 Timing spread alone is evidence, not a failure. Network and cache variation can
 change timings without changing the response contract. SSRWire warns when HTTP
-response evidence or streamed metadata changes across samples. Exact body-hash
-variation by itself is informational because timestamps, nonces, and other
-legitimate dynamic values commonly change source HTML.
+response evidence or streamed metadata changes across samples. Enabled social
+contracts are included in metadata stability; observed social tags remain
+evidence-only when their contracts are disabled. Exact body-hash variation by
+itself is informational because timestamps, nonces, and other legitimate
+dynamic values commonly change source HTML.
 
 ## CLI reference
 
@@ -344,7 +389,8 @@ removed.
 
 ## Reports and exit codes
 
-- `terminal`: compact sample, aggregate-timing, and finding tables for local use.
+- `terminal`: compact sample, social-readiness, aggregate-timing, and finding
+  tables for local use.
 - `json`: structured machine-readable evidence, including every probe and timing
   signal plus repeated-run stability summaries.
 - `sarif`: findings suitable for GitHub Code Scanning and other SARIF 2.1.0
@@ -420,9 +466,10 @@ versions.
 
 ## Scope
 
-SSRWire does not execute JavaScript, inspect a hydrated DOM, measure Core Web
-Vitals, discover URLs, validate indexing, bypass access controls, perform load
-testing, or emulate a crawler's rendering pipeline. Use
+SSRWire does not execute JavaScript, inspect a hydrated DOM, render social
+previews, fetch social images, measure Core Web Vitals, discover URLs, validate
+indexing, bypass access controls, perform load testing, or emulate a crawler's
+rendering pipeline. Use
 [RoutePlay](https://github.com/lame13/routeplay) for server HTML versus a cold
 browser versus real client-side navigation. Use
 [RouteLint](https://github.com/lame13/routelint) for route discovery,

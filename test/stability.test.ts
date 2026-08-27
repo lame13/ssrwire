@@ -4,7 +4,14 @@ import {
   calculateTimingStats,
   criticalSignalsArrivalMs,
 } from "../src/stability.js";
-import type { AuditTarget, ElementLocation, ProbeCompletion, ProbeResult } from "../src/types.js";
+import type {
+  AuditTarget,
+  ElementLocation,
+  ProbeCompletion,
+  ProbeResult,
+  SocialMetadataProperty,
+  SocialMetadataSignal,
+} from "../src/types.js";
 
 const target: AuditTarget = {
   url: "https://example.com/page",
@@ -35,6 +42,30 @@ interface ProbeFixtureOptions {
   }[];
   readonly h1?: string;
   readonly mainText?: string;
+  readonly socialMetadata?: readonly SocialMetadataSignal[];
+}
+
+function socialSignal(
+  property: SocialMetadataProperty,
+  value: string,
+  atMs: number,
+  location: ElementLocation = "head",
+): SocialMetadataSignal {
+  return { property, value, atMs, observedByByte: 600, location };
+}
+
+function socialSet(
+  title = "Stable preview",
+  titleLocation: ElementLocation = "head",
+): readonly SocialMetadataSignal[] {
+  return [
+    socialSignal("og:title", title, 51, titleLocation),
+    socialSignal("og:type", "website", 52),
+    socialSignal("og:url", target.url, 53),
+    socialSignal("og:image", "https://example.com/image.jpg", 54),
+    socialSignal("og:description", "Stable description", 55),
+    socialSignal("twitter:card", "summary_large_image", 56),
+  ];
 }
 
 function probe(options: ProbeFixtureOptions): ProbeResult {
@@ -98,6 +129,9 @@ function probe(options: ProbeFixtureOptions): ProbeResult {
                     },
                   ]),
             robots: [],
+            ...(options.socialMetadata === undefined
+              ? {}
+              : { socialMetadata: options.socialMetadata }),
             h1s: [
               {
                 value: options.h1 ?? "Heading",
@@ -314,5 +348,86 @@ describe("analyzeStability", () => {
     expect(
       criticalSignalsArrivalMs(target, probe({ sample: 1, includeDescription: false })),
     ).toBeUndefined();
+  });
+
+  it("includes enabled social contracts in critical-signal readiness", () => {
+    const socialTarget: AuditTarget = {
+      ...target,
+      expectations: {
+        ...target.expectations,
+        requireOpenGraph: true,
+        requireTwitterCard: true,
+      },
+    };
+    expect(
+      criticalSignalsArrivalMs(socialTarget, probe({ sample: 1, socialMetadata: socialSet() })),
+    ).toBe(56);
+    expect(
+      criticalSignalsArrivalMs(
+        socialTarget,
+        probe({
+          sample: 1,
+          socialMetadata: socialSet().filter((signal) => signal.property !== "og:description"),
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("tracks social value and location drift only for enabled social contracts", () => {
+    const probes = [
+      probe({ sample: 1, socialMetadata: socialSet("First preview", "head") }),
+      probe({ sample: 2, socialMetadata: socialSet("Second preview", "body") }),
+    ];
+
+    expect(analyzeStability(target, probes).findings).toEqual([]);
+
+    const socialTarget: AuditTarget = {
+      ...target,
+      expectations: {
+        ...target.expectations,
+        requireOpenGraph: true,
+        requireTwitterCard: true,
+      },
+    };
+    const analysis = analyzeStability(socialTarget, probes);
+    expect(analysis.stability[0]?.variants).toMatchObject({
+      metadataValues: 2,
+      metadataLocations: 2,
+    });
+    expect(analysis.findings).toContainEqual(
+      expect.objectContaining({ code: "stream-instability", severity: "warning" }),
+    );
+  });
+
+  it("treats Open Graph image order as stable metadata evidence", () => {
+    const withImages = (images: readonly string[]): readonly SocialMetadataSignal[] => [
+      ...socialSet().filter((signal) => signal.property !== "og:image"),
+      ...images.map((image, index) => socialSignal("og:image", image, 54 + index)),
+    ];
+    const socialTarget: AuditTarget = {
+      ...target,
+      expectations: { ...target.expectations, requireOpenGraph: true },
+    };
+    const analysis = analyzeStability(socialTarget, [
+      probe({
+        sample: 1,
+        socialMetadata: withImages([
+          "https://example.com/primary.jpg",
+          "https://example.com/alternate.jpg",
+        ]),
+      }),
+      probe({
+        sample: 2,
+        socialMetadata: withImages([
+          "https://example.com/alternate.jpg",
+          "https://example.com/primary.jpg",
+        ]),
+      }),
+    ]);
+
+    expect(analysis.stability[0]?.variants.metadataValues).toBe(2);
+    expect(analysis.findings).toContainEqual(
+      expect.objectContaining({ code: "stream-instability", severity: "warning" }),
+    );
   });
 });

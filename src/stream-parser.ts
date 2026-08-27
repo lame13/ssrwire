@@ -1,5 +1,7 @@
 import { Parser } from "htmlparser2";
 
+import { isSocialMetadataProperty } from "./social.js";
+
 import type {
   DocumentSignals,
   ElementLocation,
@@ -7,6 +9,8 @@ import type {
   JsonLdSignal,
   RobotsAudience,
   RobotsSignal,
+  SocialMetadataProperty,
+  SocialMetadataSignal,
   TimingMark,
 } from "./types.js";
 
@@ -93,6 +97,8 @@ class HtmlStreamInspector implements StreamInspector {
   readonly #descriptions: ElementSignal[] = [];
   readonly #canonicals: ElementSignal[] = [];
   readonly #robots: RobotsSignal[] = [];
+  readonly #socialMetadata: SocialMetadataSignal[] = [];
+  readonly #socialMetadataCounts = new Map<SocialMetadataProperty, number>();
   readonly #h1s: ElementSignal[] = [];
   readonly #jsonLd: JsonLdSignal[] = [];
   readonly #titles: ElementSignal[] = [];
@@ -170,6 +176,7 @@ class HtmlStreamInspector implements StreamInspector {
       descriptions: [...this.#descriptions],
       canonicals: [...this.#canonicals],
       robots: [...this.#robots],
+      socialMetadata: [...this.#socialMetadata],
       h1s: [...this.#h1s],
       ...(firstMainText === undefined || firstMainText.value.length === 0 ? {} : { firstMainText }),
       jsonLd: [...this.#jsonLd],
@@ -213,7 +220,14 @@ class HtmlStreamInspector implements StreamInspector {
       return;
     }
 
-    const { name: metaNameAttribute, content, rel, href, type: scriptType } = attributes;
+    const {
+      name: metaNameAttribute,
+      property: metaPropertyAttribute,
+      content,
+      rel,
+      href,
+      type: scriptType,
+    } = attributes;
     if (name === "head") this.#inHead = true;
     if (name === "body") {
       if (this.#bodyStarted === undefined) this.#bodyStarted = this.#mark();
@@ -232,6 +246,7 @@ class HtmlStreamInspector implements StreamInspector {
 
     if (name === "meta") {
       const metaName = metaNameAttribute?.trim().toLowerCase();
+      const metaProperty = metaPropertyAttribute?.trim().toLowerCase();
       if (
         content !== undefined &&
         metaName === "description" &&
@@ -248,6 +263,21 @@ class HtmlStreamInspector implements StreamInspector {
           ...this.#elementSignal(content, location),
           audience: metaName,
         });
+      }
+      const socialProperty = isSocialMetadataProperty(metaProperty)
+        ? metaProperty
+        : isSocialMetadataProperty(metaName)
+          ? metaName
+          : undefined;
+      if (content !== undefined && socialProperty !== undefined) {
+        const count = this.#socialMetadataCounts.get(socialProperty) ?? 0;
+        if (count < SIGNAL_LIMIT) {
+          this.#socialMetadata.push({
+            ...this.#elementSignal(content, location),
+            property: socialProperty,
+          });
+          this.#socialMetadataCounts.set(socialProperty, count + 1);
+        }
       }
     }
 

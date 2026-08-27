@@ -1,3 +1,14 @@
+import {
+  effectiveTwitterCardSignal,
+  firstSocialSignal,
+  isAbsoluteHttpSocialUrl,
+  normalizeSocialValue,
+  OPEN_GRAPH_PROPERTIES,
+  OPEN_GRAPH_REQUIRED_PROPERTIES,
+  socialSignals,
+  TWITTER_CARD_REQUIRED_FIELDS,
+  TWITTER_PROPERTIES,
+} from "./social.js";
 import type {
   AuditSummary,
   AuditTarget,
@@ -7,6 +18,8 @@ import type {
   RobotsAudience,
   RobotsSignal,
   Severity,
+  SocialMetadataProperty,
+  SocialMetadataSignal,
   TargetAuditResult,
 } from "./types.js";
 
@@ -264,6 +277,146 @@ function checkRepeatedRobots(findings: Finding[], targetUrl: string, probe: Prob
   }
 }
 
+function auditedSocialProperties(
+  target: AuditTarget,
+  probe: ProbeResult,
+): readonly SocialMetadataProperty[] {
+  const properties = new Set<SocialMetadataProperty>();
+  if (target.expectations.requireOpenGraph === true) {
+    for (const property of OPEN_GRAPH_PROPERTIES) properties.add(property);
+  }
+  if (target.expectations.requireTwitterCard === true) {
+    for (const property of TWITTER_PROPERTIES) properties.add(property);
+    if (firstSocialSignal(probe.signals, "twitter:title") === undefined) {
+      properties.add("og:title");
+    }
+    if (firstSocialSignal(probe.signals, "twitter:description") === undefined) {
+      properties.add("og:description");
+    }
+    if (firstSocialSignal(probe.signals, "twitter:image") === undefined) {
+      properties.add("og:image");
+    }
+  }
+  return [...properties];
+}
+
+function normalizedSocialValues(
+  property: SocialMetadataProperty,
+  signals: readonly SocialMetadataSignal[],
+  baseUrl: string,
+): readonly string[] {
+  return signals
+    .map((signal) => normalizeSocialValue(property, signal.value, baseUrl))
+    .filter((value) => value.length > 0);
+}
+
+function checkRepeatedSocialMetadata(
+  findings: Finding[],
+  target: AuditTarget,
+  probe: ProbeResult,
+): void {
+  for (const property of auditedSocialProperties(target, probe)) {
+    // Open Graph explicitly permits multiple images and gives the first one precedence.
+    if (property === "og:image") continue;
+    const values = normalizedSocialValues(
+      property,
+      socialSignals(probe.signals, property),
+      probe.finalUrl,
+    );
+    if (values.length < 2) continue;
+
+    const distinct = new Set(values);
+    const conflicting = distinct.size > 1;
+    addFinding(findings, target.url, {
+      code: conflicting ? "conflicting-social-metadata" : "duplicate-social-metadata",
+      severity: "warning",
+      message: conflicting
+        ? `${probe.agent.label} received conflicting ${property} values.`
+        : `${probe.agent.label} received duplicate ${property} values.`,
+      agent: probe.agent.key,
+      evidence: {
+        property,
+        count: values.length,
+        distinctValues: distinct.size,
+        values: [...distinct].join(" | "),
+      },
+    });
+  }
+}
+
+function checkSocialUrls(findings: Finding[], target: AuditTarget, probe: ProbeResult): void {
+  const candidates = new Set<SocialMetadataSignal>();
+  if (target.expectations.requireOpenGraph === true) {
+    for (const signal of socialSignals(probe.signals, "og:url")) candidates.add(signal);
+    for (const signal of socialSignals(probe.signals, "og:image")) candidates.add(signal);
+  }
+  if (target.expectations.requireTwitterCard === true) {
+    const image = effectiveTwitterCardSignal(probe.signals, "image");
+    if (image !== undefined) candidates.add(image);
+  }
+
+  for (const signal of candidates) {
+    if (signal.value.trim().length === 0 || isAbsoluteHttpSocialUrl(signal.value)) continue;
+    addFinding(findings, target.url, {
+      code: "invalid-social-metadata-url",
+      severity: "warning",
+      message: `${probe.agent.label} received a non-absolute HTTP(S) ${signal.property} URL.`,
+      agent: probe.agent.key,
+      evidence: { property: signal.property, value: signal.value },
+    });
+  }
+}
+
+function checkRequiredSocialMetadata(
+  findings: Finding[],
+  target: AuditTarget,
+  probe: ProbeResult,
+): void {
+  if (probe.completion !== "complete") return;
+
+  if (target.expectations.requireOpenGraph === true) {
+    const missing = OPEN_GRAPH_REQUIRED_PROPERTIES.filter(
+      (property) => firstSocialSignal(probe.signals, property) === undefined,
+    );
+    if (missing.length > 0) {
+      addFinding(findings, target.url, {
+        code: "missing-open-graph-metadata",
+        severity: "warning",
+        message: `${probe.agent.label} received an incomplete Open Graph metadata set.`,
+        agent: probe.agent.key,
+        evidence: { fields: missing.join(", ") },
+      });
+    }
+  }
+
+  if (target.expectations.requireTwitterCard === true) {
+    const missing = TWITTER_CARD_REQUIRED_FIELDS.filter(
+      (field) => effectiveTwitterCardSignal(probe.signals, field) === undefined,
+    );
+    if (missing.length > 0) {
+      addFinding(findings, target.url, {
+        code: "missing-twitter-card-metadata",
+        severity: "warning",
+        message: `${probe.agent.label} received an incomplete Twitter Card metadata set.`,
+        agent: probe.agent.key,
+        evidence: { fields: missing.join(", ") },
+      });
+    }
+  }
+}
+
+function checkSocialMetadata(findings: Finding[], target: AuditTarget, probe: ProbeResult): void {
+  if (
+    target.expectations.requireOpenGraph !== true &&
+    target.expectations.requireTwitterCard !== true
+  ) {
+    return;
+  }
+  checkRequiredSocialMetadata(findings, target, probe);
+  checkRepeatedSocialMetadata(findings, target, probe);
+  checkSocialUrls(findings, target, probe);
+}
+
 function criticalArrivalMs(target: AuditTarget, probe: ProbeResult): number | undefined {
   const marks: number[] = [];
   const { expectations } = target;
@@ -298,6 +451,20 @@ function criticalArrivalMs(target: AuditTarget, probe: ProbeResult): number | un
     normalizeText(probe.signals.firstMainText?.value ?? "").length > 0
   ) {
     marks.push(probe.signals.firstMainText?.atMs ?? 0);
+  }
+  if (expectations.requireOpenGraph === true) {
+    const signals = OPEN_GRAPH_REQUIRED_PROPERTIES.map((property) =>
+      firstSocialSignal(probe.signals, property),
+    );
+    if (!signals.every((signal) => signal !== undefined)) return undefined;
+    marks.push(...signals.map((signal) => signal.atMs));
+  }
+  if (expectations.requireTwitterCard === true) {
+    const signals = TWITTER_CARD_REQUIRED_FIELDS.map((field) =>
+      effectiveTwitterCardSignal(probe.signals, field),
+    );
+    if (!signals.every((signal) => signal !== undefined)) return undefined;
+    marks.push(...signals.map((signal) => signal.atMs));
   }
 
   return marks.length === 0 ? undefined : Math.max(...marks);
@@ -365,7 +532,7 @@ function checkRequiredSignals(findings: Finding[], target: AuditTarget, probe: P
   }
 }
 
-function checkHeadRequirements(findings: Finding[], targetUrl: string, probe: ProbeResult): void {
+function checkHeadRequirements(findings: Finding[], target: AuditTarget, probe: ProbeResult): void {
   if (!probe.agent.requiresHeadMetadata) {
     return;
   }
@@ -384,12 +551,17 @@ function checkHeadRequirements(findings: Finding[], targetUrl: string, probe: Pr
   if (effectiveRobotsSignals(probe).some((signal) => signal.location === "body")) {
     bodyFields.add("robots");
   }
+  for (const property of auditedSocialProperties(target, probe)) {
+    if (socialSignals(probe.signals, property).some((signal) => signal.location === "body")) {
+      bodyFields.add(property);
+    }
+  }
 
   if (bodyFields.size === 0) {
     return;
   }
 
-  addFinding(findings, targetUrl, {
+  addFinding(findings, target.url, {
     code: "head-metadata-in-body",
     severity: "error",
     message: `${probe.agent.label} requires head metadata but received ${[...bodyFields].join(
@@ -440,9 +612,31 @@ function agentValueSummary(
   return probes.map((probe) => `${probe.agent.key}=${valueFor(probe)}`).join("; ");
 }
 
+function openGraphValue(probe: ProbeResult): string {
+  return OPEN_GRAPH_PROPERTIES.map((property) => {
+    const values = [
+      ...new Set(
+        normalizedSocialValues(property, socialSignals(probe.signals, property), probe.finalUrl),
+      ),
+    ];
+    return `${property}=${values.join(" | ") || "<missing>"}`;
+  }).join(", ");
+}
+
+function twitterCardValue(probe: ProbeResult): string {
+  return TWITTER_CARD_REQUIRED_FIELDS.map((field) => {
+    const signal = effectiveTwitterCardSignal(probe.signals, field);
+    const value =
+      signal === undefined
+        ? "<missing>"
+        : normalizeSocialValue(signal.property, signal.value, probe.finalUrl);
+    return `${field}=${value || "<missing>"}`;
+  }).join(", ");
+}
+
 function checkAgentDrift(
   findings: Finding[],
-  targetUrl: string,
+  target: AuditTarget,
   probes: readonly ProbeResult[],
 ): void {
   const complete = probes.filter((probe) => probe.completion === "complete");
@@ -450,7 +644,7 @@ function checkAgentDrift(
     return;
   }
 
-  const comparisons: readonly {
+  const comparisons: {
     readonly field: string;
     readonly valueFor: (probe: ProbeResult) => string;
   }[] = [
@@ -472,6 +666,12 @@ function checkAgentDrift(
       valueFor: effectiveRobotsValue,
     },
   ];
+  if (target.expectations.requireOpenGraph === true) {
+    comparisons.push({ field: "open-graph", valueFor: openGraphValue });
+  }
+  if (target.expectations.requireTwitterCard === true) {
+    comparisons.push({ field: "twitter-card", valueFor: twitterCardValue });
+  }
 
   for (const comparison of comparisons) {
     const values = complete.map(comparison.valueFor);
@@ -479,7 +679,7 @@ function checkAgentDrift(
       continue;
     }
 
-    addFinding(findings, targetUrl, {
+    addFinding(findings, target.url, {
       code: `agent-${comparison.field}-drift`,
       severity: "warning",
       message: `Crawler profiles received different ${comparison.field.replace("-", " ")} values.`,
@@ -556,6 +756,7 @@ export function analyzeTarget(
     checkRepeatedMetadata(findings, target.url, probe, "description", probe.signals.descriptions);
     checkRepeatedMetadata(findings, target.url, probe, "canonical", probe.signals.canonicals);
     checkRepeatedRobots(findings, target.url, probe);
+    checkSocialMetadata(findings, target, probe);
 
     const invalidJsonLd = probe.signals.jsonLd.filter((signal) => signal.valid === false);
     if (probe.completion === "complete" && invalidJsonLd.length > 0) {
@@ -587,11 +788,11 @@ export function analyzeTarget(
       });
     }
 
-    checkHeadRequirements(findings, target.url, probe);
+    checkHeadRequirements(findings, target, probe);
     checkTimings(findings, target, probe);
   }
 
-  checkAgentDrift(findings, target.url, probes);
+  checkAgentDrift(findings, target, probes);
 
   return findings;
 }

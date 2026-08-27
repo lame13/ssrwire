@@ -28,6 +28,38 @@ const probe: ProbeResult = {
       },
     ],
     robots: [],
+    socialMetadata: [
+      { property: "og:title", value: "Preview", location: "head", atMs: 36, observedByByte: 210 },
+      { property: "og:type", value: "website", location: "head", atMs: 37, observedByByte: 220 },
+      {
+        property: "og:url",
+        value: "https://example.com/page",
+        location: "head",
+        atMs: 38,
+        observedByByte: 230,
+      },
+      {
+        property: "og:image",
+        value: "https://example.com/card.jpg",
+        location: "head",
+        atMs: 39,
+        observedByByte: 240,
+      },
+      {
+        property: "og:description",
+        value: "Preview description",
+        location: "head",
+        atMs: 40,
+        observedByByte: 250,
+      },
+      {
+        property: "twitter:card",
+        value: "summary_large_image",
+        location: "head",
+        atMs: 41,
+        observedByByte: 260,
+      },
+    ],
     h1s: [{ value: "Heading", location: "body", atMs: 45, observedByByte: 400 }],
     firstMainText: { value: "Main", location: "body", atMs: 50, observedByByte: 500 },
     jsonLd: [],
@@ -45,6 +77,8 @@ const targetResult: TargetAuditResult = {
       requireCanonical: true,
       requireH1: false,
       requireMainText: false,
+      requireOpenGraph: true,
+      requireTwitterCard: true,
     },
   },
   probes: [probe],
@@ -61,7 +95,7 @@ const targetResult: TargetAuditResult = {
 };
 
 const audit: AuditResult = {
-  version: "0.2.0",
+  version: "0.3.0",
   generatedAt: "2026-08-22T00:00:00.000Z",
   durationMs: 123,
   results: [targetResult],
@@ -72,10 +106,13 @@ describe("renderTerminal", () => {
   it("renders a readable, colorless timing table and finding details", () => {
     const output = renderTerminal(audit, { color: false });
 
-    expect(output).toContain("SSRWire 0.2.0");
+    expect(output).toContain("SSRWire 0.3.0");
     expect(output).toContain("Agent");
     expect(output).toContain("First byte");
     expect(output).toContain("25 ms/head");
+    expect(output).toContain("Social preview readiness");
+    expect(output).toContain("39 ms/head");
+    expect(output).toContain("41 ms/head");
     expect(output).toContain("WARNING missing-description [googlebot]");
     expect(output).toContain("Summary: 1 target(s), 1 probe(s)");
     expect(output).not.toContain("\u001b[");
@@ -107,6 +144,33 @@ describe("renderTerminal", () => {
 
   it("adds ANSI styling only when requested", () => {
     expect(renderTerminal(audit, { color: true })).toContain("\u001b[");
+  });
+
+  it("shows body readiness when any required social signal arrived in the body", () => {
+    const socialMetadata = probe.signals.socialMetadata ?? [];
+    const bodyAudit: AuditResult = {
+      ...audit,
+      results: [
+        {
+          ...targetResult,
+          probes: [
+            {
+              ...probe,
+              signals: {
+                ...probe.signals,
+                socialMetadata: socialMetadata.map((signal) =>
+                  signal.property === "og:title" ? { ...signal, location: "body" } : signal,
+                ),
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const output = renderTerminal(bodyAudit, { color: false });
+    expect(output).toContain("39 ms/body");
+    expect(output).toContain("41 ms/body");
   });
 
   it("renders sample attribution and timing aggregates for repeated runs", () => {

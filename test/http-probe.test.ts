@@ -71,7 +71,9 @@ describe("agent profiles", () => {
 
 describe("probeUrl", () => {
   it("follows same-origin redirects and preserves streamed timing, hashes, and safe headers", async () => {
-    const first = "<html><head><title>Streamed</title></head>";
+    const first =
+      '<html><head><title>Streamed</title><meta property="og:title" content="Preview">' +
+      '<meta name="twitter:card" content="summary"></head>';
     const second = "<body><h1>Ready</h1><main>Useful response</main></body></html>";
     let observedUserAgent = "";
     let observedEncoding = "";
@@ -123,6 +125,12 @@ describe("probeUrl", () => {
     expect(result.timings.firstByteMs).toBeGreaterThan(result.timings.headersMs);
     expect(result.timings.completeMs).toBeGreaterThan(result.timings.firstByteMs ?? 0);
     expect(result.signals.title).toMatchObject({ value: "Streamed", location: "head" });
+    expect(result.signals.socialMetadata).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ property: "og:title", value: "Preview", location: "head" }),
+        expect.objectContaining({ property: "twitter:card", value: "summary", location: "head" }),
+      ]),
+    );
     expect(result.signals.h1s[0]).toMatchObject({ value: "Ready", location: "body" });
     expect(result.signals.title?.atMs).toBeLessThan(result.signals.h1s[0]?.atMs ?? 0);
     expect(result.headers.values["cache-control"]).toBe("public, max-age=60");

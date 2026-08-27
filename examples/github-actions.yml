@@ -27,7 +27,7 @@ jobs:
         if: github.event_name == 'pull_request'
         continue-on-error: true
         run: >-
-          npx --yes ssrwire@0.2.0 check
+          npx --yes ssrwire@0.3.0 check
           --config ssrwire.config.yml
           --format sarif
           --output reports/ssrwire.sarif
@@ -38,7 +38,7 @@ jobs:
         if: github.event_name != 'pull_request'
         continue-on-error: true
         run: >-
-          npx --yes ssrwire@0.2.0 check
+          npx --yes ssrwire@0.3.0 check
           --config ssrwire.config.yml
           --format sarif
           --output reports/ssrwire.sarif

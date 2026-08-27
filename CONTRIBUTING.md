@@ -28,6 +28,7 @@ Keep each change narrow. Include tests for behavior changes, especially for:
 - response chunk boundaries and elements split across chunks;
 - redirects, timeouts, aborted bodies, and size limits;
 - malformed, duplicated, late, or body-located metadata;
+- Open Graph and Twitter Card requirements, fallbacks, arrays, and URL values;
 - user-agent differences and comparison findings;
 - repeated-sample ordering, aggregation, and instability classification;
 - redaction of configured header values;

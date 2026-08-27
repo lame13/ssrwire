@@ -1,3 +1,9 @@
+import {
+  effectiveTwitterCardSignal,
+  firstSocialSignal,
+  OPEN_GRAPH_REQUIRED_PROPERTIES,
+  TWITTER_CARD_REQUIRED_FIELDS,
+} from "./social.js";
 import type {
   AgentStability,
   AuditResult,
@@ -86,6 +92,31 @@ function probeRow(probe: ProbeResult, showSample: boolean): readonly string[] {
   ];
 }
 
+function formatSignalSet(signals: readonly (ElementSignal | undefined)[]): string {
+  const present = signals.filter((signal): signal is ElementSignal => signal !== undefined);
+  if (present.length < signals.length) return `${present.length}/${signals.length}`;
+  const arrivalMs = Math.max(...present.map((signal) => signal.atMs));
+  const location = present.some((signal) => signal.location === "body")
+    ? "body"
+    : present.some((signal) => signal.location === "document")
+      ? "document"
+      : "head";
+  return `${Math.round(arrivalMs)} ms/${location}`;
+}
+
+function socialRow(probe: ProbeResult, showSample: boolean): readonly string[] {
+  return [
+    ...(showSample ? [String(probe.sample ?? "—")] : []),
+    truncate(probe.agent.label, 24),
+    formatSignalSet(
+      OPEN_GRAPH_REQUIRED_PROPERTIES.map((property) => firstSocialSignal(probe.signals, property)),
+    ),
+    formatSignalSet(
+      TWITTER_CARD_REQUIRED_FIELDS.map((field) => effectiveTwitterCardSignal(probe.signals, field)),
+    ),
+  ];
+}
+
 function stabilityRows(stability: readonly AgentStability[]): readonly (readonly string[])[] {
   const labels: Readonly<Record<keyof AgentStability["timings"], string>> = {
     headers: "Headers",
@@ -170,6 +201,21 @@ export function renderTerminal(audit: AuditResult, options: ReporterOptions = {}
         result.probes.map((probe) => probeRow(probe, showSample)),
       ),
     );
+
+    const showSocial =
+      result.target.expectations.requireOpenGraph === true ||
+      result.target.expectations.requireTwitterCard === true ||
+      result.probes.some((probe) => (probe.signals.socialMetadata?.length ?? 0) > 0);
+    if (showSocial) {
+      lines.push(
+        "",
+        "Social preview readiness",
+        renderTable(
+          [...(showSample ? ["Sample"] : []), "Agent", "Open Graph", "Twitter Card"],
+          result.probes.map((probe) => socialRow(probe, showSample)),
+        ),
+      );
+    }
 
     if (result.stability !== undefined) {
       const rows = stabilityRows(result.stability);

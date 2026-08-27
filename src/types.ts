@@ -18,6 +18,21 @@ export interface RobotsSignal extends ElementSignal {
   readonly audience: RobotsAudience;
 }
 
+export type SocialMetadataProperty =
+  | "og:title"
+  | "og:type"
+  | "og:url"
+  | "og:image"
+  | "og:description"
+  | "twitter:card"
+  | "twitter:title"
+  | "twitter:description"
+  | "twitter:image";
+
+export interface SocialMetadataSignal extends ElementSignal {
+  readonly property: SocialMetadataProperty;
+}
+
 export interface JsonLdSignal extends TimingMark {
   readonly location: ElementLocation;
   readonly valid?: boolean;
@@ -33,6 +48,8 @@ export interface DocumentSignals {
   readonly descriptions: readonly ElementSignal[];
   readonly canonicals: readonly ElementSignal[];
   readonly robots: readonly RobotsSignal[];
+  /** Present on probes produced by SSRWire 0.3.0 and newer. */
+  readonly socialMetadata?: readonly SocialMetadataSignal[];
   readonly h1s: readonly ElementSignal[];
   readonly firstMainText?: ElementSignal;
   readonly jsonLd: readonly JsonLdSignal[];
@@ -109,6 +126,10 @@ export interface TargetExpectations {
   readonly requireCanonical: boolean;
   readonly requireH1: boolean;
   readonly requireMainText: boolean;
+  /** Require the four Open Graph protocol basic metadata properties. Defaults to false. */
+  readonly requireOpenGraph?: boolean;
+  /** Require SSRWire's Twitter Card readiness contract. Defaults to false. */
+  readonly requireTwitterCard?: boolean;
   readonly maxFirstByteMs?: number;
   readonly maxCriticalMs?: number;
 }

@@ -31,6 +31,8 @@ targets:
       canonical: true
       h1: true
       mainText: true
+      openGraph: false
+      twitterCard: false
 
 agents:
   - browser
@@ -168,7 +170,7 @@ export async function main(argv: readonly string[] = process.argv): Promise<void
   const program = new Command();
   program
     .name("ssrwire")
-    .description("Inspect streamed SSR HTML and crawler-specific metadata delivery.")
+    .description("Inspect streamed SSR HTML, SEO, and social metadata delivery.")
     .version(VERSION)
     .exitOverride()
     .showHelpAfterError();
