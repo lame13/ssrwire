@@ -1,4 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../src/cli.js";
 
@@ -42,6 +45,12 @@ async function serveHealthyPage(): Promise<string> {
         <meta name="description" content="A complete fixture">
         <meta name="robots" content="index,follow">
         <link rel="canonical" href="${origin}/page">
+        <meta property="og:title" content="SSRWire fixture preview">
+        <meta property="og:type" content="website">
+        <meta property="og:url" content="${origin}/page">
+        <meta property="og:image" content="${origin}/preview.jpg">
+        <meta property="og:description" content="A complete social fixture">
+        <meta name="twitter:card" content="summary_large_image">
         <script type="application/ld+json">{"@type":"Article"}</script>
       </head><body><main><h1>Fixture heading</h1><p>Useful main content.</p></main></body></html>`);
   });
@@ -92,6 +101,38 @@ describe("CLI", () => {
     expect(report.summary.probes).toBe(1);
     expect(report.results[0]?.probes[0]?.agent.key).toBe("browser");
     expect(stderr).toBe("");
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("enforces social-preview contracts from strict YAML configuration", async () => {
+    const url = await serveHealthyPage();
+    const directory = await mkdtemp(join(tmpdir(), "ssrwire-cli-social-"));
+    const configPath = join(directory, "ssrwire.config.yml");
+    await writeFile(
+      configPath,
+      `targets:
+  - url: ${url}
+    require:
+      openGraph: true
+      twitterCard: true
+agents: [browser]
+`,
+    );
+
+    try {
+      await main(["node", "ssrwire", "check", "--config", configPath, "--format", "json"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+
+    const report = JSON.parse(stdout) as {
+      results: Array<{
+        findings: Array<{ code: string }>;
+        probes: Array<{ signals: { socialMetadata: Array<{ property: string }> } }>;
+      }>;
+    };
+    expect(report.results[0]?.findings).toEqual([]);
+    expect(report.results[0]?.probes[0]?.signals.socialMetadata).toHaveLength(6);
     expect(process.exitCode ?? 0).toBe(0);
   });
 

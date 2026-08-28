@@ -9,6 +9,8 @@ targets:
       canonical: true
       h1: true
       mainText: true
+      openGraph: true
+      twitterCard: true
 
   - url: https://example.com/pricing/
     expectedStatus: 200
@@ -18,6 +20,8 @@ targets:
       canonical: true
       h1: true
       mainText: true
+      openGraph: false
+      twitterCard: false
 
 # Add maxFirstByteMs or maxCriticalMs per target only when the runner location
 # and cache state are stable enough for a meaningful threshold.

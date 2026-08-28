@@ -19,6 +19,9 @@ describe("createStreamInspector", () => {
       '<meta name="description" content="Résumé of the page">',
       '<link rel="alternate canonical" href="https://example.test/café">',
       '<meta name="robots" content="index,follow">',
+      '<meta property="og:title" content="Café preview">',
+      '<meta property="og:image" content="https://example.test/preview.jpg">',
+      '<meta name="twitter:card" content="summary_large_image">',
       '<script type="application/ld+json">',
       '{"@context":"https://schema.org","@type":"Product","offers":{"@type":"Offer"}}',
       "</script></head><body>",
@@ -45,6 +48,21 @@ describe("createStreamInspector", () => {
       location: "head",
       audience: "robots",
     });
+    expect(signals.socialMetadata).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ property: "og:title", value: "Café preview", location: "head" }),
+        expect.objectContaining({
+          property: "og:image",
+          value: "https://example.test/preview.jpg",
+          location: "head",
+        }),
+        expect.objectContaining({
+          property: "twitter:card",
+          value: "summary_large_image",
+          location: "head",
+        }),
+      ]),
+    );
     expect(signals.h1s[0]).toMatchObject({ value: "Привет мир", location: "body" });
     expect(signals.firstMainText).toMatchObject({ value: "First useful text", location: "body" });
     expect(signals.jsonLd[0]).toMatchObject({
@@ -86,10 +104,12 @@ describe("createStreamInspector", () => {
         '<html><head><meta name="robots" content="index,follow">' +
           '<meta name="googlebot" content="noindex"><meta name="bingbot" content="nofollow">' +
           '<template><title>Template title</title><meta name="description" content="template">' +
+          '<meta property="og:title" content="Template preview">' +
           '<link rel="canonical" href="/template"><meta name="robots" content="none">' +
           "<h1>Template H1</h1><main>Template main</main>" +
           '<script type="application/ld+json">{"@type":"TemplateThing"}</script></template>' +
           '</head><body><svg><title>SVG title</title><meta name="description" content="svg">' +
+          '<meta property="og:title" content="SVG preview">' +
           '<link rel="canonical" href="/svg"><h1>SVG H1</h1><main>SVG main</main>' +
           '<script type="application/ld+json">{"@type":"SvgThing"}</script></svg>' +
           '<math><title>Math title</title><meta name="robots" content="noindex">' +
@@ -109,6 +129,7 @@ describe("createStreamInspector", () => {
       { audience: "googlebot", value: "noindex" },
       { audience: "bingbot", value: "nofollow" },
     ]);
+    expect(signals.socialMetadata).toEqual([]);
     expect(signals.h1s.map(({ value }) => value)).toEqual(["Real H1"]);
     expect(signals.firstMainText?.value).toBe("Real main");
     expect(signals.jsonLd).toEqual([]);
@@ -129,6 +150,51 @@ describe("createStreamInspector", () => {
     expect(signals.title?.value).toBe("Loading");
     expect(signals.titles?.map((signal) => signal.value)).toEqual(["Loading", "Final"]);
     expect(signals.jsonLd[0]).toMatchObject({ valid: true, types: ["Article"] });
+  });
+
+  it("captures social metadata from property or name attributes with body timing", () => {
+    const inspector = createStreamInspector();
+    inspector.write(
+      Buffer.from(
+        '<html><head><meta PROPERTY="OG:TITLE" content="Open Graph title">' +
+          '<meta name="og:description" content="Open Graph description">' +
+          '<meta property="twitter:card" content="summary"></head><body>' +
+          '<meta name="twitter:image" content="https://example.test/card.jpg"></body></html>',
+      ),
+      41,
+    );
+
+    const social = inspector.end(45).socialMetadata ?? [];
+    expect(social.map(({ property, value, location }) => ({ property, value, location }))).toEqual([
+      { property: "og:title", value: "Open Graph title", location: "head" },
+      { property: "og:description", value: "Open Graph description", location: "head" },
+      { property: "twitter:card", value: "summary", location: "head" },
+      {
+        property: "twitter:image",
+        value: "https://example.test/card.jpg",
+        location: "body",
+      },
+    ]);
+    expect(social.every((signal) => signal.atMs === 41)).toBe(true);
+  });
+
+  it("bounds each repeated social metadata property independently", () => {
+    const inspector = createStreamInspector();
+    inspector.write(
+      Buffer.from(
+        `<head>${Array.from(
+          { length: 257 },
+          (_, index) => `<meta property="og:image" content="https://example.test/${index}.jpg">`,
+        ).join("")}<meta property="og:title" content="Still captured"></head>`,
+      ),
+      10,
+    );
+
+    const social = inspector.end(12).socialMetadata ?? [];
+    expect(social.filter((signal) => signal.property === "og:image")).toHaveLength(256);
+    expect(social).toContainEqual(
+      expect.objectContaining({ property: "og:title", value: "Still captured" }),
+    );
   });
 
   it("bounds very large main text and JSON-LD captures", () => {

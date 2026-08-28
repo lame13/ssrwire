@@ -90,6 +90,11 @@ function redactSignals(signals: DocumentSignals, plan: RedactionPlan): DocumentS
     descriptions: signals.descriptions.map((signal) => redactElement(signal, plan)),
     canonicals: signals.canonicals.map((signal) => redactElement(signal, plan)),
     robots: signals.robots.map((signal) => redactElement(signal, plan)),
+    ...(signals.socialMetadata === undefined
+      ? {}
+      : {
+          socialMetadata: signals.socialMetadata.map((signal) => redactElement(signal, plan)),
+        }),
     h1s: signals.h1s.map((signal) => redactElement(signal, plan)),
     ...(signals.firstMainText === undefined
       ? {}

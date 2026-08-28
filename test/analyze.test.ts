@@ -8,6 +8,8 @@ import type {
   ProbeResult,
   RobotsAudience,
   RobotsSignal,
+  SocialMetadataProperty,
+  SocialMetadataSignal,
   TargetAuditResult,
 } from "../src/types.js";
 
@@ -47,6 +49,26 @@ function robotsSignal(
   location: RobotsSignal["location"] = "head",
 ): RobotsSignal {
   return { value, audience, atMs, observedByByte: 100, location };
+}
+
+function socialSignal(
+  property: SocialMetadataProperty,
+  value: string,
+  atMs = 20,
+  location: SocialMetadataSignal["location"] = "head",
+): SocialMetadataSignal {
+  return { property, value, atMs, observedByByte: 100, location };
+}
+
+function healthySocialMetadata(): readonly SocialMetadataSignal[] {
+  return [
+    socialSignal("og:title", "Example preview", 50),
+    socialSignal("og:type", "website", 51),
+    socialSignal("og:url", "https://example.com/page", 52),
+    socialSignal("og:image", "https://example.com/image.jpg", 53),
+    socialSignal("og:description", "Example social description", 54),
+    socialSignal("twitter:card", "summary_large_image", 55),
+  ];
 }
 
 function healthySignals(): DocumentSignals {
@@ -416,6 +438,103 @@ describe("analyzeTarget", () => {
 
     expect(findings.some((finding) => finding.code === "json-ld-analysis-limit")).toBe(true);
     expect(findings.some((finding) => finding.code === "invalid-json-ld")).toBe(false);
+  });
+
+  it("accepts complete Open Graph and Twitter Card contracts with Open Graph fallbacks", () => {
+    const completeProbe = probe({
+      signals: { ...healthySignals(), socialMetadata: healthySocialMetadata() },
+    });
+    const findings = analyzeTarget(target({ requireOpenGraph: true, requireTwitterCard: true }), [
+      completeProbe,
+    ]);
+
+    expect(findings).toEqual([]);
+    expect(
+      analyzeTarget(
+        target({ requireOpenGraph: true, requireTwitterCard: true, maxCriticalMs: 54 }),
+        [completeProbe],
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "slow-critical-signals",
+        evidence: expect.objectContaining({ observedMs: 55 }),
+      }),
+    );
+  });
+
+  it("reports missing social contracts only when they are enabled", () => {
+    expect(analyzeTarget(target(), [probe()])).toEqual([]);
+
+    const findings = analyzeTarget(target({ requireOpenGraph: true, requireTwitterCard: true }), [
+      probe(),
+    ]);
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "missing-open-graph-metadata",
+          evidence: { fields: "og:title, og:type, og:url, og:image" },
+        }),
+        expect.objectContaining({
+          code: "missing-twitter-card-metadata",
+          evidence: { fields: "card, title, description, image" },
+        }),
+      ]),
+    );
+  });
+
+  it("validates social URLs, scalar conflicts, and head-only delivery without rejecting image arrays", () => {
+    const propertyEvidenceKey = "property";
+    const socialMetadata: readonly SocialMetadataSignal[] = [
+      ...healthySocialMetadata(),
+      socialSignal("og:title", "Conflicting preview", 60, "body"),
+      socialSignal("og:image", "https://example.com/alternate.jpg", 61),
+      socialSignal("twitter:image", "/relative-card.jpg", 62, "body"),
+      socialSignal("twitter:card", "summary_large_image", 63),
+    ];
+    const findings = analyzeTarget(target({ requireOpenGraph: true, requireTwitterCard: true }), [
+      probe({
+        agent: headOnlyAgent,
+        signals: { ...healthySignals(), socialMetadata },
+      }),
+    ]);
+    const codes = findings.map((finding) => finding.code);
+
+    expect(codes).toContain("conflicting-social-metadata");
+    expect(codes).toContain("duplicate-social-metadata");
+    expect(codes).toContain("invalid-social-metadata-url");
+    expect(codes).toContain("head-metadata-in-body");
+    expect(
+      findings.filter(
+        (finding) =>
+          finding.code === "conflicting-social-metadata" &&
+          finding.evidence?.[propertyEvidenceKey] === "og:image",
+      ),
+    ).toEqual([]);
+    expect(
+      findings.find((finding) => finding.code === "head-metadata-in-body")?.evidence,
+    ).toMatchObject({ fields: expect.stringContaining("twitter:image") });
+  });
+
+  it("reports social metadata drift between crawler profiles when the contract is enabled", () => {
+    const browser = probe({
+      signals: { ...healthySignals(), socialMetadata: healthySocialMetadata() },
+    });
+    const socialBot = probe({
+      agent: headOnlyAgent,
+      signals: {
+        ...healthySignals(),
+        socialMetadata: healthySocialMetadata().map((item) =>
+          item.property === "og:title" ? { ...item, value: "Alternate preview" } : item,
+        ),
+      },
+    });
+
+    const codes = analyzeTarget(target({ requireOpenGraph: true, requireTwitterCard: true }), [
+      browser,
+      socialBot,
+    ]).map((finding) => finding.code);
+    expect(codes).toContain("agent-open-graph-drift");
+    expect(codes).toContain("agent-twitter-card-drift");
   });
 });
 

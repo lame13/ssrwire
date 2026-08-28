@@ -27,6 +27,8 @@ export type {
   RobotsAudience,
   RobotsSignal,
   Severity,
+  SocialMetadataProperty,
+  SocialMetadataSignal,
   SsrWireConfig,
   StabilityTimings,
   StabilityVariants,

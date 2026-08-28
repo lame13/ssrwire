@@ -23,6 +23,8 @@ const requireSchema = z
     canonical: z.boolean().optional(),
     h1: z.boolean().optional(),
     mainText: z.boolean().optional(),
+    openGraph: z.boolean().optional(),
+    twitterCard: z.boolean().optional(),
   })
   .strict();
 
@@ -129,6 +131,8 @@ function normalizeTarget(value: string | z.infer<typeof targetObjectSchema>): Au
     requireCanonical: required?.canonical ?? true,
     requireH1: required?.h1 ?? true,
     requireMainText: required?.mainText ?? true,
+    requireOpenGraph: required?.openGraph ?? false,
+    requireTwitterCard: required?.twitterCard ?? false,
     ...(item.maxFirstByteMs === undefined ? {} : { maxFirstByteMs: item.maxFirstByteMs }),
     ...(item.maxCriticalMs === undefined ? {} : { maxCriticalMs: item.maxCriticalMs }),
   };

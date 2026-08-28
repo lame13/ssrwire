@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const node = process.execPath;
 const npmCli = process.env.npm_execpath;
-const expectedVersion = "0.2.0";
+const expectedVersion = "0.3.0";
 
 if (!npmCli) {
   throw new Error("npm_execpath is unavailable. Run this check with npm run package:check.");
@@ -55,6 +55,8 @@ try {
     "dist/cli.js",
     "dist/index.js",
     "dist/index.d.ts",
+    "dist/social.js",
+    "dist/social.d.ts",
     "dist/stability.js",
     "dist/stability.d.ts",
     "src/index.ts",
@@ -102,6 +104,8 @@ try {
   if (
     !initialized.includes("targets:") ||
     !initialized.includes("agents:") ||
+    !initialized.includes("openGraph: false") ||
+    !initialized.includes("twitterCard: false") ||
     !initialized.includes("repeat: 1")
   ) {
     throw new Error("Installed CLI did not create a valid starter configuration.");

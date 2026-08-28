@@ -35,6 +35,15 @@ function fixture(): ProbeResult {
       descriptions: [],
       canonicals: [],
       robots: [],
+      socialMetadata: [
+        {
+          property: "og:title",
+          value: "Preview very-secret-token",
+          location: "head",
+          atMs: 13,
+          observedByByte: 50,
+        },
+      ],
       h1s: [],
       jsonLd: [],
     },
@@ -79,7 +88,7 @@ describe("redactProbe", () => {
     const secret = "preview-token-987";
     const probe = fixture();
     const audit: AuditResult = {
-      version: "0.2.0",
+      version: "0.3.0",
       generatedAt: "2026-08-22T00:00:00.000Z",
       durationMs: 1,
       results: [
@@ -135,7 +144,7 @@ describe("redactProbe", () => {
   it("preserves typed control fields when a header value matches an enum", () => {
     const probe = fixture();
     const audit: AuditResult = {
-      version: "0.2.0",
+      version: "0.3.0",
       generatedAt: "2026-08-22T00:00:00.000Z",
       durationMs: 1,
       results: [
