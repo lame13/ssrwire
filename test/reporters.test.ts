@@ -95,7 +95,8 @@ const targetResult: TargetAuditResult = {
 };
 
 const audit: AuditResult = {
-  version: "0.3.0",
+  schemaVersion: 1,
+  version: "0.4.0",
   generatedAt: "2026-08-22T00:00:00.000Z",
   durationMs: 123,
   results: [targetResult],
@@ -106,7 +107,7 @@ describe("renderTerminal", () => {
   it("renders a readable, colorless timing table and finding details", () => {
     const output = renderTerminal(audit, { color: false });
 
-    expect(output).toContain("SSRWire 0.3.0");
+    expect(output).toContain("SSRWire 0.4.0");
     expect(output).toContain("Agent");
     expect(output).toContain("First byte");
     expect(output).toContain("25 ms/head");

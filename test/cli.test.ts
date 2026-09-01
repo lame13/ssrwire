@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -69,9 +69,11 @@ describe("CLI", () => {
     await main(["node", "ssrwire", url, "--agent", "browser", "--format", "json"]);
 
     const report = JSON.parse(stdout) as {
+      schemaVersion: number;
       summary: { errors: number; incomplete: number; probes: number };
       results: Array<{ probes: Array<{ status: number }> }>;
     };
+    expect(report.schemaVersion).toBe(1);
     expect(report.summary).toMatchObject({ errors: 0, incomplete: 0, probes: 1 });
     expect(report.results[0]?.probes[0]?.status).toBe(200);
     expect(stderr).toBe("");
@@ -147,6 +149,27 @@ agents: [browser]
     await main(["node", "ssrwire", "--timeout", "not-a-number"]);
 
     expect(stderr).toContain("Expected an integer");
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("keeps check and comparison format and failure policies separate", async () => {
+    await main(["node", "ssrwire", "https://example.com", "--format", "html"]);
+    expect(stderr).toContain("Expected terminal, json, or sarif");
+    expect(process.exitCode).toBe(2);
+
+    stdout = "";
+    stderr = "";
+    process.exitCode = undefined;
+    await main([
+      "node",
+      "ssrwire",
+      "compare",
+      "baseline.json",
+      "candidate.json",
+      "--fail-on",
+      "error",
+    ]);
+    expect(stderr).toContain("Expected regression or never");
     expect(process.exitCode).toBe(2);
   });
 
@@ -244,5 +267,73 @@ agents: [browser]
 
     expect(stderr).toContain("repeat must be an integer between 1 and 10");
     expect(process.exitCode).toBe(2);
+  });
+
+  it("compares JSON reports, fails on regressions, and writes self-contained HTML", async () => {
+    const url = await serveHealthyPage();
+    await main(["node", "ssrwire", url, "--agent", "browser", "--format", "json"]);
+    const baselineText = stdout;
+    const candidate = JSON.parse(baselineText) as {
+      results: Array<{
+        findings: Array<{
+          code: string;
+          severity: string;
+          message: string;
+          url: string;
+          agent?: string;
+        }>;
+      }>;
+    };
+    candidate.results[0]?.findings.push({
+      code: "new-regression",
+      severity: "error",
+      message: "Candidate introduced a regression.",
+      url,
+      agent: "browser",
+    });
+
+    const directory = await mkdtemp(join(tmpdir(), "ssrwire-cli-compare-"));
+    const baselinePath = join(directory, "production.json");
+    const candidatePath = join(directory, "preview.json");
+    const htmlPath = join(directory, "comparison.html");
+    await writeFile(baselinePath, baselineText);
+    await writeFile(candidatePath, JSON.stringify(candidate));
+
+    try {
+      stdout = "";
+      stderr = "";
+      process.exitCode = undefined;
+      await main(["node", "ssrwire", "compare", baselinePath, candidatePath, "--format", "json"]);
+
+      const comparison = JSON.parse(stdout) as {
+        kind: string;
+        summary: { regressions: number };
+      };
+      expect(comparison).toMatchObject({ kind: "comparison", summary: { regressions: 1 } });
+      expect(process.exitCode).toBe(1);
+
+      stdout = "";
+      stderr = "";
+      process.exitCode = undefined;
+      await main([
+        "node",
+        "ssrwire",
+        "compare",
+        baselinePath,
+        candidatePath,
+        "--format",
+        "html",
+        "--output",
+        htmlPath,
+        "--fail-on",
+        "never",
+      ]);
+
+      expect(await readFile(htmlPath, "utf8")).toContain("Wire waterfall");
+      expect(stderr).toContain("wrote html comparison");
+      expect(process.exitCode ?? 0).toBe(0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

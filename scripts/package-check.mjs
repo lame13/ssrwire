@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const node = process.execPath;
 const npmCli = process.env.npm_execpath;
-const expectedVersion = "0.3.0";
+const expectedVersion = "0.4.0";
 
 if (!npmCli) {
   throw new Error("npm_execpath is unavailable. Run this check with npm run package:check.");
@@ -53,6 +53,12 @@ try {
   const required = [
     "dist/bin.js",
     "dist/cli.js",
+    "dist/audit-report.js",
+    "dist/audit-report.d.ts",
+    "dist/compare.js",
+    "dist/compare.d.ts",
+    "dist/comparison-reporters.js",
+    "dist/comparison-reporters.d.ts",
     "dist/index.js",
     "dist/index.d.ts",
     "dist/social.js",
@@ -96,8 +102,17 @@ try {
   if (!helpOutput.includes("Inspect streamed SSR HTML")) {
     throw new Error("Installed CLI did not render its help output.");
   }
-  if (!helpOutput.includes("--repeat <count>")) {
+  const checkHelp = runNpm(["exec", "--", "ssrwire", "check", "--help"], installDirectory);
+  if (!checkHelp.includes("--repeat <count>")) {
     throw new Error("Installed CLI did not expose repeat sampling.");
+  }
+  const compareHelp = runNpm(["exec", "--", "ssrwire", "compare", "--help"], installDirectory);
+  if (
+    !compareHelp.includes("--timing-regression-ms <ms>") ||
+    !compareHelp.includes("terminal, json, or html") ||
+    !compareHelp.includes("regression or never")
+  ) {
+    throw new Error("Installed CLI did not expose audit comparison.");
   }
   runNpm(["exec", "--", "ssrwire", "init", "smoke.config.yml"], installDirectory);
   const initialized = await readFile(join(installDirectory, "smoke.config.yml"), "utf8");
@@ -117,8 +132,8 @@ try {
   );
 
   const importScript = [
-    'import { VERSION, runAudit } from "ssrwire";',
-    'if (!VERSION || typeof runAudit !== "function") process.exit(1);',
+    'import { VERSION, compareAudits, runAudit } from "ssrwire";',
+    'if (!VERSION || typeof runAudit !== "function" || typeof compareAudits !== "function") process.exit(1);',
   ].join("\n");
   const importPath = join(installDirectory, "import-smoke.mjs");
   await writeFile(importPath, `${importScript}\n`);
