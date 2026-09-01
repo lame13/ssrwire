@@ -8,6 +8,7 @@ import type { AgentProfile, AuditTarget, SsrWireConfig, TargetExpectations } fro
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_REDIRECTS = 10;
+const DEFAULT_REPEAT = 1;
 const DEFAULT_AGENTS = ["browser", "googlebot", "bingbot", "twitterbot"] as const;
 const DEFAULT_CONFIG_FILES = [
   "ssrwire.config.yml",
@@ -22,11 +23,17 @@ const requireSchema = z
     canonical: z.boolean().optional(),
     h1: z.boolean().optional(),
     mainText: z.boolean().optional(),
+    openGraph: z.boolean().optional(),
+    twitterCard: z.boolean().optional(),
   })
   .strict();
 
 const targetObjectSchema = z
   .object({
+    id: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/i)
+      .optional(),
     url: z.string().min(1),
     expectedStatus: z
       .union([
@@ -66,6 +73,7 @@ const fileConfigSchema = z
       .max(50 * 1024 * 1024)
       .optional(),
     maxRedirects: z.number().int().min(0).max(20).optional(),
+    repeat: z.number().int().min(1).max(10).optional(),
   })
   .strict();
 
@@ -79,6 +87,7 @@ export interface LoadConfigOptions {
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
+  readonly repeat?: number;
   readonly cwd?: string;
 }
 
@@ -126,11 +135,14 @@ function normalizeTarget(value: string | z.infer<typeof targetObjectSchema>): Au
     requireCanonical: required?.canonical ?? true,
     requireH1: required?.h1 ?? true,
     requireMainText: required?.mainText ?? true,
+    requireOpenGraph: required?.openGraph ?? false,
+    requireTwitterCard: required?.twitterCard ?? false,
     ...(item.maxFirstByteMs === undefined ? {} : { maxFirstByteMs: item.maxFirstByteMs }),
     ...(item.maxCriticalMs === undefined ? {} : { maxCriticalMs: item.maxCriticalMs }),
   };
 
   return {
+    ...(item.id === undefined ? {} : { id: item.id }),
     url: validateHttpUrl(item.url, "target URL"),
     expectations,
   };
@@ -252,13 +264,22 @@ async function readConfig(path: string | undefined): Promise<FileConfig> {
 
 function uniqueTargets(targets: readonly AuditTarget[]): readonly AuditTarget[] {
   const seen = new Set<string>();
-  return targets.filter((target) => {
+  const unique = targets.filter((target) => {
     if (seen.has(target.url)) {
       return false;
     }
     seen.add(target.url);
     return true;
   });
+  const ids = new Set<string>();
+  for (const target of unique) {
+    if (target.id === undefined) continue;
+    if (ids.has(target.id)) {
+      throw new ConfigError(`Target id ${target.id} is duplicated.`);
+    }
+    ids.add(target.id);
+  }
+  return unique;
 }
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWireConfig> {
@@ -291,6 +312,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
   const timeoutMs = options.timeoutMs ?? file.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBytes = options.maxBytes ?? file.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxRedirects = options.maxRedirects ?? file.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+  const repeat = options.repeat ?? file.repeat ?? DEFAULT_REPEAT;
 
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 120_000) {
     throw new ConfigError("timeoutMs must be an integer between 100 and 120000.");
@@ -301,6 +323,9 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
   if (!Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 20) {
     throw new ConfigError("maxRedirects must be an integer between 0 and 20.");
   }
+  if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) {
+    throw new ConfigError("repeat must be an integer between 1 and 10.");
+  }
 
   return {
     targets,
@@ -309,5 +334,6 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
     timeoutMs,
     maxBytes,
     maxRedirects,
+    repeat,
   };
 }

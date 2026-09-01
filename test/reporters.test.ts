@@ -28,6 +28,38 @@ const probe: ProbeResult = {
       },
     ],
     robots: [],
+    socialMetadata: [
+      { property: "og:title", value: "Preview", location: "head", atMs: 36, observedByByte: 210 },
+      { property: "og:type", value: "website", location: "head", atMs: 37, observedByByte: 220 },
+      {
+        property: "og:url",
+        value: "https://example.com/page",
+        location: "head",
+        atMs: 38,
+        observedByByte: 230,
+      },
+      {
+        property: "og:image",
+        value: "https://example.com/card.jpg",
+        location: "head",
+        atMs: 39,
+        observedByByte: 240,
+      },
+      {
+        property: "og:description",
+        value: "Preview description",
+        location: "head",
+        atMs: 40,
+        observedByByte: 250,
+      },
+      {
+        property: "twitter:card",
+        value: "summary_large_image",
+        location: "head",
+        atMs: 41,
+        observedByByte: 260,
+      },
+    ],
     h1s: [{ value: "Heading", location: "body", atMs: 45, observedByByte: 400 }],
     firstMainText: { value: "Main", location: "body", atMs: 50, observedByByte: 500 },
     jsonLd: [],
@@ -45,6 +77,8 @@ const targetResult: TargetAuditResult = {
       requireCanonical: true,
       requireH1: false,
       requireMainText: false,
+      requireOpenGraph: true,
+      requireTwitterCard: true,
     },
   },
   probes: [probe],
@@ -61,7 +95,8 @@ const targetResult: TargetAuditResult = {
 };
 
 const audit: AuditResult = {
-  version: "0.1.0",
+  schemaVersion: 1,
+  version: "0.4.0",
   generatedAt: "2026-08-22T00:00:00.000Z",
   durationMs: 123,
   results: [targetResult],
@@ -72,10 +107,13 @@ describe("renderTerminal", () => {
   it("renders a readable, colorless timing table and finding details", () => {
     const output = renderTerminal(audit, { color: false });
 
-    expect(output).toContain("SSRWire 0.1.0");
+    expect(output).toContain("SSRWire 0.4.0");
     expect(output).toContain("Agent");
     expect(output).toContain("First byte");
     expect(output).toContain("25 ms/head");
+    expect(output).toContain("Social preview readiness");
+    expect(output).toContain("39 ms/head");
+    expect(output).toContain("41 ms/head");
     expect(output).toContain("WARNING missing-description [googlebot]");
     expect(output).toContain("Summary: 1 target(s), 1 probe(s)");
     expect(output).not.toContain("\u001b[");
@@ -107,6 +145,89 @@ describe("renderTerminal", () => {
 
   it("adds ANSI styling only when requested", () => {
     expect(renderTerminal(audit, { color: true })).toContain("\u001b[");
+  });
+
+  it("shows body readiness when any required social signal arrived in the body", () => {
+    const socialMetadata = probe.signals.socialMetadata ?? [];
+    const bodyAudit: AuditResult = {
+      ...audit,
+      results: [
+        {
+          ...targetResult,
+          probes: [
+            {
+              ...probe,
+              signals: {
+                ...probe.signals,
+                socialMetadata: socialMetadata.map((signal) =>
+                  signal.property === "og:title" ? { ...signal, location: "body" } : signal,
+                ),
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const output = renderTerminal(bodyAudit, { color: false });
+    expect(output).toContain("39 ms/body");
+    expect(output).toContain("41 ms/body");
+  });
+
+  it("renders sample attribution and timing aggregates for repeated runs", () => {
+    const repeated: AuditResult = {
+      ...audit,
+      repeat: 2,
+      results: [
+        {
+          ...targetResult,
+          probes: [
+            { ...probe, sample: 1 },
+            {
+              ...probe,
+              sample: 2,
+              timings: { headersMs: 20, firstByteMs: 30, completeMs: 100 },
+            },
+          ],
+          stability: [
+            {
+              agent: probe.agent,
+              samples: 2,
+              complete: 2,
+              incomplete: 0,
+              timings: {
+                headers: {
+                  samples: 2,
+                  minMs: 10,
+                  medianMs: 15,
+                  p95Ms: 20,
+                  maxMs: 20,
+                  spreadMs: 10,
+                },
+              },
+              variants: {
+                completion: 1,
+                status: 1,
+                finalUrl: 1,
+                redirectChain: 1,
+                bodySha256: 1,
+                metadataValues: 1,
+                metadataLocations: 1,
+              },
+            },
+          ],
+        },
+      ],
+      summary: { ...audit.summary, probes: 2 },
+    };
+
+    const output = renderTerminal(repeated, { color: false });
+    expect(output).toContain("2 sequential samples per URL and agent");
+    expect(output).toContain("Sample");
+    expect(output).toContain("Stability timings (nearest-rank p95)");
+    expect(output).toContain("Median");
+    expect(output).toContain("15 ms");
+    expect(JSON.parse(renderJson(repeated)).results[0].stability).toHaveLength(1);
   });
 });
 
@@ -146,5 +267,68 @@ describe("structured reporters", () => {
       "https://example.com/page",
     );
     expect(output.endsWith("\n")).toBe(true);
+  });
+
+  it("maps stability information and warnings to SARIF notes and warnings with evidence", () => {
+    const stabilityAudit: AuditResult = {
+      ...audit,
+      repeat: 2,
+      results: [
+        {
+          ...targetResult,
+          findings: [
+            {
+              code: "stream-instability",
+              severity: "info",
+              message: "Googlebot returned changing body fingerprints across samples.",
+              url: targetResult.target.url,
+              agent: "googlebot",
+              evidence: {
+                samples: 2,
+                completeSamples: 2,
+                fields: "bodySha256",
+                variantCounts: "bodySha256=2",
+              },
+            },
+            {
+              code: "response-instability",
+              severity: "warning",
+              message: "Googlebot returned inconsistent HTTP response evidence across samples.",
+              url: targetResult.target.url,
+              agent: "googlebot",
+              evidence: {
+                samples: 2,
+                completeSamples: 2,
+                fields: "status",
+                variantCounts: "status=2",
+              },
+            },
+          ],
+        },
+      ],
+      summary: { targets: 1, probes: 2, errors: 0, warnings: 1, info: 1, incomplete: 0 },
+    };
+
+    const sarif = JSON.parse(renderSarif(stabilityAudit)) as {
+      runs: Array<{
+        results: Array<{
+          ruleId: string;
+          level: string;
+          properties?: Record<string, unknown>;
+        }>;
+      }>;
+    };
+    const results = sarif.runs[0]?.results ?? [];
+    const stream = results.find((result) => result.ruleId === "stream-instability");
+    const response = results.find((result) => result.ruleId === "response-instability");
+
+    expect(stream).toMatchObject({
+      level: "note",
+      properties: { agent: "googlebot", samples: 2, fields: "bodySha256" },
+    });
+    expect(response).toMatchObject({
+      level: "warning",
+      properties: { agent: "googlebot", samples: 2, fields: "status" },
+    });
   });
 });

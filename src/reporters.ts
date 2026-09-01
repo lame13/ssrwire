@@ -1,4 +1,11 @@
+import {
+  effectiveTwitterCardSignal,
+  firstSocialSignal,
+  OPEN_GRAPH_REQUIRED_PROPERTIES,
+  TWITTER_CARD_REQUIRED_FIELDS,
+} from "./social.js";
 import type {
+  AgentStability,
   AuditResult,
   ElementSignal,
   Finding,
@@ -70,8 +77,9 @@ function firstSignal(signals: readonly ElementSignal[]): ElementSignal | undefin
   return signals.find((signal) => signal.value.trim().length > 0) ?? signals[0];
 }
 
-function probeRow(probe: ProbeResult): readonly string[] {
+function probeRow(probe: ProbeResult, showSample: boolean): readonly string[] {
   return [
+    ...(showSample ? [String(probe.sample ?? "—")] : []),
     truncate(probe.agent.label, 24),
     probe.status === undefined ? "—" : String(probe.status),
     probe.completion,
@@ -82,6 +90,59 @@ function probeRow(probe: ProbeResult): readonly string[] {
     formatSignal(firstSignal(probe.signals.canonicals)),
     formatSignal(probe.signals.firstMainText),
   ];
+}
+
+function formatSignalSet(signals: readonly (ElementSignal | undefined)[]): string {
+  const present = signals.filter((signal): signal is ElementSignal => signal !== undefined);
+  if (present.length < signals.length) return `${present.length}/${signals.length}`;
+  const arrivalMs = Math.max(...present.map((signal) => signal.atMs));
+  const location = present.some((signal) => signal.location === "body")
+    ? "body"
+    : present.some((signal) => signal.location === "document")
+      ? "document"
+      : "head";
+  return `${Math.round(arrivalMs)} ms/${location}`;
+}
+
+function socialRow(probe: ProbeResult, showSample: boolean): readonly string[] {
+  return [
+    ...(showSample ? [String(probe.sample ?? "—")] : []),
+    truncate(probe.agent.label, 24),
+    formatSignalSet(
+      OPEN_GRAPH_REQUIRED_PROPERTIES.map((property) => firstSocialSignal(probe.signals, property)),
+    ),
+    formatSignalSet(
+      TWITTER_CARD_REQUIRED_FIELDS.map((field) => effectiveTwitterCardSignal(probe.signals, field)),
+    ),
+  ];
+}
+
+function stabilityRows(stability: readonly AgentStability[]): readonly (readonly string[])[] {
+  const labels: Readonly<Record<keyof AgentStability["timings"], string>> = {
+    headers: "Headers",
+    firstByte: "First byte",
+    criticalSignals: "Critical signals",
+    complete: "Complete",
+  };
+  const rows: string[][] = [];
+  for (const summary of stability) {
+    for (const key of ["headers", "firstByte", "criticalSignals", "complete"] as const) {
+      const stats = summary.timings[key];
+      if (stats === undefined) continue;
+      rows.push([
+        truncate(summary.agent.label, 24),
+        `${summary.complete}/${summary.samples}`,
+        labels[key],
+        String(stats.samples),
+        formatMs(stats.minMs),
+        formatMs(stats.medianMs),
+        formatMs(stats.p95Ms),
+        formatMs(stats.maxMs),
+        formatMs(stats.spreadMs),
+      ]);
+    }
+  }
+  return rows;
 }
 
 function renderTable(headers: readonly string[], rows: readonly (readonly string[])[]): string {
@@ -116,12 +177,17 @@ export function renderTerminal(audit: AuditResult, options: ReporterOptions = {}
     paint(`SSRWire ${audit.version}`, ANSI.bold, color),
     paint(`Generated ${audit.generatedAt} in ${formatMs(audit.durationMs)}`, ANSI.dim, color),
   ];
+  if ((audit.repeat ?? 1) > 1) {
+    lines.push(paint(`${audit.repeat} sequential samples per URL and agent`, ANSI.dim, color));
+  }
 
   for (const result of audit.results) {
+    const showSample = (audit.repeat ?? 1) > 1;
     lines.push("", paint(terminalSafe(result.target.url), ANSI.bold, color));
     lines.push(
       renderTable(
         [
+          ...(showSample ? ["Sample"] : []),
           "Agent",
           "HTTP",
           "Result",
@@ -132,9 +198,38 @@ export function renderTerminal(audit: AuditResult, options: ReporterOptions = {}
           "Canonical",
           "Main",
         ],
-        result.probes.map(probeRow),
+        result.probes.map((probe) => probeRow(probe, showSample)),
       ),
     );
+
+    const showSocial =
+      result.target.expectations.requireOpenGraph === true ||
+      result.target.expectations.requireTwitterCard === true ||
+      result.probes.some((probe) => (probe.signals.socialMetadata?.length ?? 0) > 0);
+    if (showSocial) {
+      lines.push(
+        "",
+        "Social preview readiness",
+        renderTable(
+          [...(showSample ? ["Sample"] : []), "Agent", "Open Graph", "Twitter Card"],
+          result.probes.map((probe) => socialRow(probe, showSample)),
+        ),
+      );
+    }
+
+    if (result.stability !== undefined) {
+      const rows = stabilityRows(result.stability);
+      if (rows.length > 0) {
+        lines.push(
+          "",
+          "Stability timings (nearest-rank p95)",
+          renderTable(
+            ["Agent", "Complete", "Metric", "N", "Min", "Median", "P95", "Max", "Spread"],
+            rows,
+          ),
+        );
+      }
+    }
 
     if (result.findings.length === 0) {
       lines.push("Findings: none");

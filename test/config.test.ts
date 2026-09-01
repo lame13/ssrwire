@@ -28,10 +28,13 @@ describe("loadConfig", () => {
     await writeFile(
       join(cwd, "ssrwire.config.yml"),
       `targets:
-  - url: https://example.com/path#section
+  - id: product-page
+    url: https://example.com/path#section
     expectedStatus: [200, 404, 200]
     require:
       description: false
+      openGraph: true
+      twitterCard: true
 agents:
   - browser
   - key: social-preview
@@ -46,13 +49,17 @@ timeoutMs: 5000
     const config = await loadConfig({ cwd });
 
     expect(config.targets[0]?.url).toBe("https://example.com/path");
+    expect(config.targets[0]?.id).toBe("product-page");
     expect(config.targets[0]?.expectations.statuses).toEqual([200, 404]);
     expect(config.targets[0]?.expectations.requireDescription).toBe(false);
+    expect(config.targets[0]?.expectations.requireOpenGraph).toBe(true);
+    expect(config.targets[0]?.expectations.requireTwitterCard).toBe(true);
     expect(config.agents.map((agent) => agent.key)).toEqual(["browser", "social-preview"]);
     expect(new Map(Object.entries(config.headers)).get("authorization")).toBe(
       "Bearer secret-value",
     );
     expect(config.timeoutMs).toBe(5000);
+    expect(config.repeat).toBe(1);
   });
 
   it("rejects unknown configuration keys", async () => {
@@ -108,6 +115,10 @@ timeoutMs: 5000
       "https://example.com/a",
       "https://example.com/b",
     ]);
+    expect(config.targets[1]?.expectations).toMatchObject({
+      requireOpenGraph: false,
+      requireTwitterCard: false,
+    });
   });
 
   it("rejects transport headers managed by the probe", () => {
@@ -120,5 +131,37 @@ timeoutMs: 5000
     );
     expect(() => parseHeaderOption("Host: attacker.example")).toThrow(/managed/);
     expect(() => parseHeaderOption("Broken header")).toThrow(/form/);
+  });
+
+  it("loads repeat and lets the command line override it", async () => {
+    const cwd = await temporaryDirectory();
+    await writeFile(join(cwd, "ssrwire.config.yml"), "targets: [https://example.com]\nrepeat: 3\n");
+
+    expect((await loadConfig({ cwd })).repeat).toBe(3);
+    expect((await loadConfig({ cwd, repeat: 2 })).repeat).toBe(2);
+  });
+
+  it("rejects repeat counts outside the bounded sampling range", async () => {
+    await expect(loadConfig({ urls: ["https://example.com"], repeat: 0 })).rejects.toThrow(
+      "repeat must be an integer between 1 and 10",
+    );
+    await expect(loadConfig({ urls: ["https://example.com"], repeat: 11 })).rejects.toThrow(
+      "repeat must be an integer between 1 and 10",
+    );
+  });
+
+  it("rejects duplicate stable target ids", async () => {
+    const cwd = await temporaryDirectory();
+    await writeFile(
+      join(cwd, "ssrwire.config.yml"),
+      `targets:
+  - id: shared
+    url: https://example.com/a
+  - id: shared
+    url: https://example.com/b
+`,
+    );
+
+    await expect(loadConfig({ cwd })).rejects.toThrow("Target id shared is duplicated");
   });
 });

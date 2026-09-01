@@ -1,16 +1,17 @@
 # SSRWire
 
 [![CI](https://github.com/lame13/ssrwire/actions/workflows/ci.yml/badge.svg)](https://github.com/lame13/ssrwire/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/ssrwire.svg)](https://www.npmjs.com/package/ssrwire)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Inspect streamed SSR HTML, metadata timing, and crawler-specific delivery from
-the command line.
+Inspect streamed SSR HTML, SEO and social metadata timing, and crawler-specific
+delivery from the command line.
 
 SSRWire makes a real HTTP request for each selected user-agent profile, reads
-the response incrementally, and records when important SEO signals become
-observable to its parser. It reports their elapsed time, observed byte
-position, and document location without launching a browser or executing
-JavaScript.
+the response incrementally, and records when important SEO and social-preview
+signals become observable to its parser. It reports their elapsed time,
+observed byte position, and document location without launching a browser or
+executing JavaScript.
 
 ```bash
 npx ssrwire https://example.com/product
@@ -24,7 +25,9 @@ Modern SSR output is not always one complete HTML document delivered at once:
 - a framework may intentionally stream metadata into `<body>` for a capable
   crawler while blocking for an HTML-limited bot;
 - browser, search-crawler, and social-crawler user agents may receive different
-  titles, canonicals, robots directives, redirects, or statuses;
+  titles, canonicals, social-preview metadata, robots directives, redirects, or
+  statuses;
+- the same URL and user agent may receive inconsistent SSR output between requests;
 - an interrupted or oversized stream may never deliver the expected elements;
 - a working hydrated page can hide thin or incomplete source HTML.
 
@@ -82,15 +85,74 @@ npx ssrwire check \
 The root command and `check` are equivalent, so `npx ssrwire URL` is the short
 form of `npx ssrwire check URL`.
 
+## Compare deployments
+
+SSRWire can compare two JSON audits without making more network requests. Give
+the same logical target a stable `id` in each environment so reports can match
+across different origins:
+
+```yaml
+# production.yml
+targets:
+  - id: home
+    url: https://www.example.com/
+  - id: pricing
+    url: https://www.example.com/pricing/
+```
+
+```yaml
+# preview.yml
+targets:
+  - id: home
+    url: https://preview.example.net/
+  - id: pricing
+    url: https://preview.example.net/pricing/
+```
+
+Capture and compare the already-redacted reports:
+
+```bash
+npx ssrwire check --config production.yml --format json --output production.json
+npx ssrwire check --config preview.yml --format json --output preview.json
+
+npx ssrwire compare production.json preview.json
+npx ssrwire compare production.json preview.json \
+  --format html \
+  --output ssrwire-diff.html
+```
+
+The comparison classifies candidate-only warning/error findings and newly
+incomplete probes as regressions, resolved findings and material timing
+improvements as fixed, and response or metadata differences as neutral changes.
+A metadata change becomes a regression when it causes a candidate policy
+finding, such as required metadata disappearing or head-only crawler metadata
+moving into the body.
+
+Timing regressions use per-agent medians and require both an absolute increase
+over 250 ms and a relative increase over 25% by default. Both floors are
+configurable on `compare`; small timing differences remain visible in the HTML
+waterfall without making CI noisy. `--fail-on regression` is the comparison
+default, while `--fail-on never` always exits successfully after valid reports
+are compared.
+
+The HTML report is one self-contained, script-free file with synchronized
+baseline and candidate milestones. It never embeds raw response HTML. SSRWire
+does not create or update baseline files automatically.
+
+Reports without target IDs match by exact target URL. IDs must be unique within
+one report, so an ID mismatch is shown as one removed and one added target
+instead of being guessed. Comparison requires the explicit `schemaVersion: 1`
+audit contract emitted by SSRWire 0.4.0.
+
 ## What it observes
 
-For each target and agent, SSRWire captures:
+For each target, agent, and configured sample, SSRWire captures:
 
 - response status, final URL, redirect chain, and an allowlisted response-header snapshot;
 - time to response headers, first response-body bytes, and completed body;
 - total bytes delivered to the stream parser and a body fingerprint;
-- title, meta description, canonical, meta robots, H1, first main-content
-  text, and JSON-LD blocks;
+- title, meta description, canonical, meta robots, Open Graph, Twitter Card,
+  H1, first main-content text, and JSON-LD blocks;
 - elapsed arrival time, observed byte position, and `head`/`body` location for
   each signal;
 - clean completion, timeout, network failure, invalid response, or configured
@@ -105,10 +167,15 @@ It then checks:
 | Missing title | Error |
 | Missing description, canonical, H1, or main text | Warning |
 | Duplicate or conflicting title, description, canonical, or robots values | Warning |
+| Missing an enabled Open Graph or Twitter Card contract | Warning |
+| Invalid social metadata URL or conflicting scalar social metadata | Warning |
 | Invalid JSON-LD | Warning |
 | JSON-LD block/count exceeds the bounded analysis budget | Warning |
-| Critical metadata in `<body>` for a profile that requires head metadata | Error |
-| Status, final URL, title, canonical, or robots drift between profiles | Warning |
+| Critical or enabled social metadata in `<body>` for a profile that requires head metadata | Error |
+| Status, final URL, title, canonical, robots, or enabled social metadata drift between profiles | Warning |
+| Completion, status, final URL, or redirect-chain drift between samples | Warning |
+| Metadata value or document-location drift between complete samples | Warning |
+| Exact body fingerprint drift without metadata drift | Information |
 | First byte or required-signal arrival over a configured limit | Warning |
 | Timeout, truncation, network error, or another incomplete probe | Error / incomplete run |
 
@@ -157,6 +224,41 @@ agents:
     requiresHeadMetadata: true
 ```
 
+## Social preview metadata
+
+Every probe captures these bounded, ordered metadata signals when they arrive
+before completion or termination:
+
+- Open Graph: `og:title`, `og:type`, `og:url`, `og:image`, and
+  `og:description`;
+- Twitter Card: `twitter:card`, `twitter:title`, `twitter:description`, and
+  `twitter:image`.
+
+SSRWire accepts either the conventional `property` attribute or a `name`
+attribute for those keys. Each captured value carries the same arrival time,
+observed byte position, and document location as the existing metadata
+signals. The terminal report shows a compact readiness table whenever social
+metadata is observed or required, while JSON retains every captured value.
+
+Social policy is opt-in per target. `openGraph: true` requires the four basic
+[Open Graph protocol](https://ogp.me/) properties: title, type, URL, and image.
+The `twitterCard: true` option requires `twitter:card` plus a usable title,
+description, and image; SSRWire prefers the corresponding `twitter:*` value
+and falls back to `og:title`, `og:description`, or `og:image`. These are
+explicit SSRWire audit contracts, not a claim that a social platform will
+render a particular preview.
+
+Enabled contracts also participate in critical-signal timing, head/body
+policy, cross-agent drift, and repeated-sample stability checks. URL-valued
+fields must be absolute HTTP or HTTPS URLs. Open Graph permits multiple images,
+so SSRWire retains them in order without treating the array as a scalar
+conflict; the first non-empty image satisfies readiness.
+
+When both options are false, SSRWire still records and reports raw social
+signals but emits no social-policy or social-drift findings. It does not fetch
+images, verify dimensions or media types, execute JavaScript, or simulate a
+platform's rendered preview.
+
 ## Configuration
 
 SSRWire automatically looks for `ssrwire.config.yml`,
@@ -165,7 +267,8 @@ takes precedence.
 
 ```yaml
 targets:
-  - url: https://example.com/
+  - id: home
+    url: https://example.com/
     expectedStatus: 200
     expectedFinalUrl: https://example.com/
     require:
@@ -174,10 +277,13 @@ targets:
       canonical: true
       h1: true
       mainText: true
+      openGraph: true
+      twitterCard: true
     maxFirstByteMs: 1200
     maxCriticalMs: 2500
 
-  - url: https://example.com/not-found/
+  - id: not-found
+    url: https://example.com/not-found/
     expectedStatus: [404]
     require:
       title: true
@@ -185,6 +291,8 @@ targets:
       canonical: false
       h1: true
       mainText: true
+      openGraph: false
+      twitterCard: false
 
 agents:
   - browser
@@ -198,6 +306,7 @@ headers:
 timeoutMs: 15000
 maxBytes: 10485760
 maxRedirects: 10
+repeat: 1
 ```
 
 A target can also be a plain URL string when defaults are sufficient:
@@ -208,14 +317,20 @@ targets:
   - https://example.com/pricing/
 ```
 
+Use the object form with a stable `id` when reports from different origins will
+be compared. IDs are 1–64 ASCII letters, digits, dots, underscores, or hyphens,
+and must start with a letter or digit.
+
 Defaults:
 
 - expected status: `200`;
 - title, description, canonical, H1, and main text: required;
+- Open Graph and Twitter Card contracts: disabled;
 - agents: `browser`, `googlebot`, `bingbot`, and `twitterbot`;
 - timeout: 15 seconds per probe;
 - response limit: 10 MiB;
-- redirect limit: 10.
+- redirect limit: 10;
+- samples per target and agent: 1, with an allowed range of 1–10.
 
 Unknown configuration keys are rejected. URLs must be absolute HTTP or HTTPS
 URLs and cannot contain embedded credentials.
@@ -255,11 +370,11 @@ The final response must declare `text/html` or `application/xhtml+xml` as its
 sniff headerless, JSON, text, or binary responses for HTML-looking fragments.
 
 To keep hostile or accidentally huge pages bounded, SSRWire retains at most
-256 signals of each repeated metadata kind, analyzes at most 64 JSON-LD blocks,
-and captures at most 1,048,576 characters from one JSON-LD block. Exceeding a
-JSON-LD analysis budget produces a dedicated warning rather than being
-mislabeled as invalid JSON. The configured response-byte limit remains the
-outer bound.
+256 signals of each repeated metadata kind, including each supported social
+property, analyzes at most 64 JSON-LD blocks, and captures at most 1,048,576
+characters from one JSON-LD block. Exceeding a JSON-LD analysis budget produces
+a dedicated warning rather than being mislabeled as invalid JSON. The
+configured response-byte limit remains the outer bound.
 
 ## Timing interpretation
 
@@ -276,11 +391,46 @@ transfer-size or packet-boundary evidence. They count bytes delivered by the
 Fetch implementation to SSRWire; those bytes are post-content-decoding when a
 server ignores SSRWire's `Accept-Encoding: identity` request.
 
+## Repeated sampling
+
+Use repeated sampling when one successful request does not prove that SSR output
+is stable:
+
+```bash
+npx ssrwire check --repeat 3
+```
+
+`repeat` is the total number of samples, not a retry count. SSRWire retains
+failures instead of replacing them with a later success. Samples for one
+target-agent pair run sequentially; different target-agent pairs may still run
+concurrently. SSRWire does not add delays, cache-busting parameters, or special
+cache headers.
+
+The request count is `targets × agents × repeat`, plus redirect hops. Configured
+same-origin headers are sent for every sample and retain the existing
+cross-origin stripping and report-redaction behavior.
+
+For repeated runs, terminal reports include individual sample numbers and a
+per-agent timing table. JSON retains every probe and adds per-agent stability
+summaries. The summaries report sample count, minimum, median, nearest-rank p95,
+maximum, and spread for available header, first-byte, required-signal, and
+completion timings. With small sample counts, nearest-rank p95 will often equal
+the maximum.
+
+Timing spread alone is evidence, not a failure. Network and cache variation can
+change timings without changing the response contract. SSRWire warns when HTTP
+response evidence or streamed metadata changes across samples. Enabled social
+contracts are included in metadata stability; observed social tags remain
+evidence-only when their contracts are disabled. Exact body-hash variation by
+itself is informational because timestamps, nonces, and other legitimate
+dynamic values commonly change source HTML.
+
 ## CLI reference
 
 ```text
 ssrwire [urls...] [options]
 ssrwire check [urls...] [options]
+ssrwire compare <baseline.json> <candidate.json> [options]
 ssrwire init [path] [--force]
 ```
 
@@ -294,6 +444,7 @@ Check options:
 | `--timeout <ms>` | Override request timeout |
 | `--max-bytes <bytes>` | Override response-body limit |
 | `--max-redirects <count>` | Override redirect limit |
+| `--repeat <count>` | Run 1–10 sequential samples per URL and agent |
 | `-f, --format <format>` | `terminal`, `json`, or `sarif` |
 | `-o, --output <path>` | Write the report to a file |
 | `--fail-on <level>` | `error`, `warning`, or `never` |
@@ -302,13 +453,27 @@ Check options:
 Config-file targets and CLI URLs are combined, with exact duplicate URLs
 removed.
 
+Comparison options:
+
+| Option | Purpose |
+|---|---|
+| `-f, --format <format>` | `terminal`, `json`, or self-contained `html` |
+| `-o, --output <path>` | Write the comparison to a file |
+| `--fail-on <level>` | `regression` or `never` |
+| `--timing-regression-ms <ms>` | Absolute median slowdown floor; default `250` |
+| `--timing-regression-percent <percent>` | Relative median slowdown floor; default `25` |
+| `--no-color` | Disable terminal color |
+
 ## Reports and exit codes
 
-- `terminal`: compact tables and findings for local use.
+- `terminal`: compact sample, social-readiness, aggregate-timing, and finding
+  tables for local use.
 - `json`: structured machine-readable evidence, including every probe and timing
-  signal.
+  signal plus repeated-run stability summaries.
 - `sarif`: findings suitable for GitHub Code Scanning and other SARIF 2.1.0
   consumers.
+- comparison `html`: a script-free deployment summary and per-agent wire
+  waterfall suitable for a CI artifact.
 
 Exit codes are stable:
 
@@ -316,7 +481,11 @@ Exit codes are stable:
 - `1`: the run completed but crossed the `--fail-on` threshold;
 - `2`: configuration/setup failure or incomplete probe evidence.
 
-`--fail-on never` suppresses policy failures, but it never converts an
+For `compare`, exit `1` means at least one regression was introduced under the
+default policy, while invalid or unreadable reports use exit `2`. Neutral
+changes and fixed findings do not fail comparison.
+
+`check --fail-on never` suppresses policy failures, but it never converts an
 incomplete probe into a pass.
 
 ## GitHub Actions
@@ -369,26 +538,49 @@ by the CLI:
 ```ts
 import { loadConfig, renderJson, runAudit } from "ssrwire";
 
-const config = await loadConfig({ urls: ["https://example.com/"] });
+const config = await loadConfig({ urls: ["https://example.com/"], repeat: 3 });
 const audit = await runAudit(config);
 process.stdout.write(renderJson(audit));
 ```
 
-Treat the JSON report's top-level `version` as the SSRWire software version,
-not a promise that every nested field will remain unchanged across major
-versions.
+Comparisons use the same primitives as the CLI:
+
+```ts
+import { readFile } from "node:fs/promises";
+import {
+  compareAudits,
+  parseAuditReportText,
+  renderComparisonHtml,
+} from "ssrwire";
+
+const [baselineJson, candidateJson] = await Promise.all([
+  readFile("production.json", "utf8"),
+  readFile("preview.json", "utf8"),
+]);
+const baseline = parseAuditReportText(baselineJson, "baseline audit report");
+const candidate = parseAuditReportText(candidateJson, "candidate audit report");
+const comparison = compareAudits(baseline, candidate);
+const html = renderComparisonHtml(comparison);
+```
+
+The JSON report's top-level `version` is the SSRWire software version.
+`schemaVersion` separately identifies the persisted report contract used by
+offline comparison.
 
 ## Scope
 
-SSRWire does not execute JavaScript, inspect a hydrated DOM, measure Core Web
-Vitals, discover URLs, validate indexing, bypass access controls, or emulate a
-crawler's rendering pipeline. Use [RoutePlay](https://github.com/lame13/routeplay)
-when the question is server HTML versus a cold browser versus real client-side
-navigation.
+SSRWire does not execute JavaScript, inspect a hydrated DOM, render social
+previews, fetch social images, measure Core Web Vitals, discover URLs, validate
+indexing, bypass access controls, perform load testing, or emulate a crawler's
+rendering pipeline. Use
+[RoutePlay](https://github.com/lame13/routeplay) for server HTML versus a cold
+browser versus real client-side navigation. Use
+[RouteLint](https://github.com/lame13/routelint) for route discovery,
+indexability, and technical SEO policy.
 
 Run SSRWire only against targets you are authorized to inspect. Keep target
-lists intentionally small; one run starts one probe per target/profile pair,
-with additional requests for redirect hops.
+lists and repeat counts intentionally small. It is a consistency sampler, not a
+load generator.
 
 ## Development
 

@@ -90,6 +90,11 @@ function redactSignals(signals: DocumentSignals, plan: RedactionPlan): DocumentS
     descriptions: signals.descriptions.map((signal) => redactElement(signal, plan)),
     canonicals: signals.canonicals.map((signal) => redactElement(signal, plan)),
     robots: signals.robots.map((signal) => redactElement(signal, plan)),
+    ...(signals.socialMetadata === undefined
+      ? {}
+      : {
+          socialMetadata: signals.socialMetadata.map((signal) => redactElement(signal, plan)),
+        }),
     h1s: signals.h1s.map((signal) => redactElement(signal, plan)),
     ...(signals.firstMainText === undefined
       ? {}
@@ -151,6 +156,7 @@ export function redactAudit(audit: AuditResult, secrets: readonly string[]): Aud
     results: audit.results.map((result) => ({
       target: {
         ...result.target,
+        ...(result.target.id === undefined ? {} : { id: redactText(result.target.id, plan) }),
         url: redactText(result.target.url, plan),
         expectations: {
           ...result.target.expectations,
@@ -160,6 +166,18 @@ export function redactAudit(audit: AuditResult, secrets: readonly string[]): Aud
         },
       },
       probes: result.probes.map((probe) => redactProbeWithPlan(probe, plan)),
+      ...(result.stability === undefined
+        ? {}
+        : {
+            stability: result.stability.map((summary) => ({
+              ...summary,
+              agent: {
+                ...summary.agent,
+                label: redactText(summary.agent.label, plan),
+                userAgent: redactText(summary.agent.userAgent, plan),
+              },
+            })),
+          }),
       findings: result.findings.map((finding) => ({
         ...finding,
         message: redactText(finding.message, plan),

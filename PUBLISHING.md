@@ -1,109 +1,124 @@
-# Publish SSRWire from a local machine
+# Publish SSRWire 0.4.0 from a local machine
 
-This repository intentionally includes no npm publishing workflow. Every npm
-release is published from a local interactive terminal after GitHub CI passes.
-Do not configure an `NPM_TOKEN`, trusted publisher, OIDC identity, or automated
-release workflow for npm publication.
+This repository intentionally includes no npm publishing workflow. Publish from
+a foreground local terminal only after the GitHub `CI` workflow passes. Do not
+configure an `NPM_TOKEN`, trusted publisher, OIDC identity, or automated npm
+release job.
 
-## 1. Prepare and verify
+The `main` branch is protected. Land every release change through a pull
+request, and do not use an administrator bypass or a direct push to `main`.
 
-From the extracted archive:
+## 1. Update the existing repository
+
+Work from a clean clone of the existing public repository. Copy the 0.4.0
+source files into that clone while preserving its `.git` directory.
 
 ```bash
-unzip ssrwire.zip # skip when already inside a source checkout
 cd ssrwire
+git switch main
+git pull --ff-only origin main
+git status --short
+git switch -c release/0.4.0
+```
+
+`git status --short` must be empty before creating the release branch and
+applying the release files.
+
+## 2. Verify the release locally
+
+```bash
 nvm use 24
 node --version
 npm --version
 npm ci
 npm run check
 npm pack --dry-run
+node dist/bin.js --version
 ```
 
-Install and authenticate GitHub CLI if needed:
+The final command must print `0.4.0`. Inspect the dry-run file list. It must not
+contain `.env`, `.github`, `node_modules`, `test`, ZIP files, or tarballs.
+
+Review the release diff and version references:
 
 ```bash
-brew install gh
-gh auth login -h github.com --web
-gh auth status -h github.com
+git diff --check
+git diff --stat
+git diff -- package.json package-lock.json CHANGELOG.md README.md PUBLISHING.md
+rg '0\.3\.0' README.md examples package.json package-lock.json scripts src test
 ```
 
-## 2. Create the Git history
+The final search should return nothing. Historical entries in `CHANGELOG.md`
+are excluded intentionally.
+
+## 3. Commit, push the release branch, and open a pull request
 
 ```bash
-git init -b main
-git add -- \
-  .dockerignore .editorconfig .env.example .github .gitignore \
-  CHANGELOG.md CONTRIBUTING.md Dockerfile LICENSE PUBLISHING.md README.md SECURITY.md \
-  biome.json examples package.json package-lock.json scripts src test \
-  tsconfig.build.json tsconfig.json vitest.config.ts
-git commit -m "Initial SSRWire release"
+gh auth status -h github.com || gh auth login -h github.com --web
+git add --all
+git diff --cached --check
+git diff --cached --stat
+git commit -m "feat: release SSRWire 0.4.0"
+git push --set-upstream origin release/0.4.0
+gh pr create --base main --head release/0.4.0 --fill
+PR_NUMBER="$(gh pr view release/0.4.0 --json number --jq .number)"
+test -n "$PR_NUMBER"
+gh pr checks "$PR_NUMBER" --watch --fail-fast
 ```
 
-## 3. Create and push the public repository
+Do not merge while any Node, package-smoke, or Docker job is failing. Satisfy
+all review and branch-protection requirements, then merge with GitHub's allowed
+strategy. Running `gh pr merge "$PR_NUMBER"` without a strategy flag lets the
+CLI prompt for one of the repository's permitted methods. Do not select an
+administrator bypass.
 
 ```bash
-gh repo create lame13/ssrwire \
-  --public \
-  --source=. \
-  --remote=origin \
-  --push \
-  --description "Inspect streamed SSR HTML, metadata timing, and crawler-specific delivery from the command line." \
-  --homepage "https://nikom.work"
+gh pr merge "$PR_NUMBER"
 ```
 
-## 4. Add repository topics
+After GitHub reports the pull request as merged, update local `main` and wait
+for the CI run on the exact merged commit:
 
 ```bash
-gh repo edit lame13/ssrwire \
-  --add-topic technical-seo \
-  --add-topic seo \
-  --add-topic ssr \
-  --add-topic streaming-html \
-  --add-topic nextjs \
-  --add-topic nuxt \
-  --add-topic astro \
-  --add-topic crawler \
-  --add-topic typescript \
-  --add-topic cli \
-  --add-topic seo-tools \
-  --add-topic github-actions \
-  --add-topic sarif
+git switch main
+git pull --ff-only origin main
+git status --short
+gh pr view "$PR_NUMBER" --json state,mergedAt,mergeCommit
+COMMIT_SHA="$(git rev-parse HEAD)"
+RUN_ID="$(gh run list --workflow CI --branch main --commit "$COMMIT_SHA" \
+  --limit 1 --json databaseId --jq '.[0].databaseId')"
+test -n "$RUN_ID"
+gh run watch "$RUN_ID" --exit-status
 ```
 
-Enable the private vulnerability-reporting channel referenced by
-`SECURITY.md` (this requires repository admin permission):
+`git status --short` must be empty. Do not publish until the merged-commit CI
+run succeeds.
+
+## 4. Verify npm state
 
 ```bash
-gh api --method PUT repos/lame13/ssrwire/private-vulnerability-reporting
+npm view ssrwire version dist-tags homepage keywords repository.url --json
+npm config get registry
+npm config get provenance
 ```
 
-Alternatively, enable **Private vulnerability reporting** in the repository's
-Settings → Security settings before publishing the first release.
+The published version and `latest` tag must still be `0.3.0`. If npm already
+reports `0.4.0`, stop: never reuse a version that npm accepted.
 
-Recommended repository description:
+In the npm package settings, select **Require two-factor authentication and
+disallow tokens**. npm documents this as the strongest package publishing
+setting:
 
-> Inspect streamed SSR HTML, metadata timing, and crawler-specific delivery from the command line.
+- <https://docs.npmjs.com/requiring-2fa-for-package-publishing-and-settings-modification/>
+- <https://docs.npmjs.com/about-two-factor-authentication/>
 
-Wait for the repository's `CI` workflow to pass before publishing.
+## 5. Publish interactively
 
-## 5. Publish version 0.1.0 to npm locally
-
-Verify the release from a clean checkout before starting npm's short-lived
-authenticated session:
-
-```bash
-npm ci
-npm run check
-npm pack --dry-run
-npm view ssrwire
-```
-
-For the first release, `npm view` returning a 404 means the name is not
-currently published. Start authentication only after verification so the
-session remains fresh for publication:
+Remove inherited automation credentials before starting the interactive
+session:
 
 ```bash
+unset NODE_AUTH_TOKEN NPM_TOKEN NPM_CONFIG_OTP npm_config_otp
 npm login --auth-type=web --registry=https://registry.npmjs.org
 npm whoami --registry=https://registry.npmjs.org
 npm publish --access public --registry=https://registry.npmjs.org
@@ -111,24 +126,23 @@ npm view ssrwire version dist-tags homepage keywords repository.url --json
 npm logout --registry=https://registry.npmjs.org
 ```
 
-Run login and publish in a foreground interactive terminal. Complete npm's
-browser, passkey, or two-factor-authentication challenge when prompted. Never
-put an OTP in a command argument, and do not add an `NPM_TOKEN` to this
-repository.
+Complete npm's browser, passkey, or two-factor-authentication challenge when
+prompted. Do not use a token with bypass 2FA, put an OTP in a command argument,
+or add an npm credential to the repository or GitHub Actions. The package-level
+"disallow tokens" setting ensures that publication remains interactive.
 
-If the package is not immediately visible after `npm publish` succeeds, wait
-for npm's publish-time scanning to finish instead of publishing the same
-version again.
+If npm's publish-time scanning delays package visibility, wait. Do not publish
+`0.4.0` again or change the tag to work around propagation.
 
-After npm confirms `0.1.0`, create the matching source release:
+## 6. Tag the exact published commit
 
 ```bash
 node scripts/clean.mjs
 rm -rf node_modules/.vite
 git status --short
-git tag -a v0.1.0 -m "SSRWire v0.1.0"
-git push origin v0.1.0
-gh release create v0.1.0 --generate-notes --title "SSRWire v0.1.0"
+git tag -a v0.4.0 -m "SSRWire v0.4.0"
+git push origin v0.4.0
+gh release create v0.4.0 --generate-notes --title "SSRWire v0.4.0"
 ```
 
-`git status --short` must print nothing before tagging the release.
+`git status --short` must print nothing before tagging.

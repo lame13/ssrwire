@@ -55,6 +55,7 @@ function emptySignals(): DocumentSignals {
     descriptions: [],
     canonicals: [],
     robots: [],
+    socialMetadata: [],
     h1s: [],
     jsonLd: [],
   };
@@ -91,6 +92,9 @@ function redactSignals(signals: DocumentSignals, redaction: RedactionPlan): Docu
     descriptions: signals.descriptions.map(element),
     canonicals: signals.canonicals.map(element),
     robots: signals.robots.map(element),
+    ...(signals.socialMetadata === undefined
+      ? {}
+      : { socialMetadata: signals.socialMetadata.map(element) }),
     h1s: signals.h1s.map(element),
     ...(signals.firstMainText === undefined
       ? {}

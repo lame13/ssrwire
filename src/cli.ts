@@ -1,10 +1,13 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 import { Command, CommanderError, InvalidArgumentError } from "commander";
 import { runAudit } from "./audit.js";
+import { AuditReportError, parseAuditReportText } from "./audit-report.js";
+import { compareAudits } from "./compare.js";
+import { renderComparisonReport } from "./comparison-reporters.js";
 import { ConfigError, loadConfig } from "./config.js";
 import { renderReport } from "./reporters.js";
-import type { ReportFormat } from "./types.js";
+import type { AuditResult, ComparisonReportFormat, ReportFormat } from "./types.js";
 import { VERSION } from "./version.js";
 
 interface CliOptions {
@@ -14,15 +17,26 @@ interface CliOptions {
   readonly timeout?: number;
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
+  readonly repeat?: number;
   readonly format: ReportFormat;
   readonly output?: string;
   readonly failOn: "error" | "warning" | "never";
   readonly color: boolean;
 }
 
+interface CompareCliOptions {
+  readonly format: ComparisonReportFormat;
+  readonly output?: string;
+  readonly failOn: "regression" | "never";
+  readonly timingRegressionMs: number;
+  readonly timingRegressionPercent: number;
+  readonly color: boolean;
+}
+
 const CONFIG_TEMPLATE = `# SSRWire configuration
 targets:
-  - url: https://example.com/
+  - id: home
+    url: https://example.com/
     expectedStatus: 200
     require:
       title: true
@@ -30,6 +44,8 @@ targets:
       canonical: true
       h1: true
       mainText: true
+      openGraph: false
+      twitterCard: false
 
 agents:
   - browser
@@ -40,6 +56,7 @@ agents:
 timeoutMs: 15000
 maxBytes: 10485760
 maxRedirects: 10
+repeat: 1
 
 # Keep preview credentials in environment variables. SSRWire redacts configured values from reports.
 # headers:
@@ -72,6 +89,24 @@ function parseFailOn(value: string): CliOptions["failOn"] {
   throw new InvalidArgumentError("Expected error, warning, or never.");
 }
 
+function parseComparisonFormat(value: string): ComparisonReportFormat {
+  if (value === "terminal" || value === "json" || value === "html") return value;
+  throw new InvalidArgumentError("Expected terminal, json, or html.");
+}
+
+function parseComparisonFailOn(value: string): CompareCliOptions["failOn"] {
+  if (value === "regression" || value === "never") return value;
+  throw new InvalidArgumentError("Expected regression or never.");
+}
+
+function parseNonNegativeNumber(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new InvalidArgumentError("Expected a finite non-negative number.");
+  }
+  return parsed;
+}
+
 function addCheckOptions(command: Command): Command {
   return command
     .option("-c, --config <path>", "configuration file")
@@ -80,6 +115,7 @@ function addCheckOptions(command: Command): Command {
     .option("--timeout <ms>", "request timeout in milliseconds", parseInteger)
     .option("--max-bytes <bytes>", "maximum response bytes", parseInteger)
     .option("--max-redirects <count>", "maximum redirects", parseInteger)
+    .option("--repeat <count>", "sequential samples per URL and agent", parseInteger)
     .option("-f, --format <format>", "terminal, json, or sarif", parseFormat, "terminal")
     .option("-o, --output <path>", "write the report to a file")
     .option("--fail-on <level>", "error, warning, or never", parseFailOn, "error")
@@ -115,6 +151,16 @@ async function writeReport(path: string, report: string): Promise<void> {
   await writeFile(absolute, report, "utf8");
 }
 
+async function readAuditFile(path: string, label: string): Promise<AuditResult> {
+  let text: string;
+  try {
+    text = await readFile(resolve(path), "utf8");
+  } catch {
+    throw new AuditReportError(`Could not read ${label} audit report: ${path}`);
+  }
+  return parseAuditReportText(text, `${label} audit report`);
+}
+
 async function check(urls: readonly string[], options: CliOptions): Promise<void> {
   const config = await loadConfig({
     ...(options.config ? { configPath: options.config } : {}),
@@ -124,6 +170,7 @@ async function check(urls: readonly string[], options: CliOptions): Promise<void
     ...(options.timeout === undefined ? {} : { timeoutMs: options.timeout }),
     ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
     ...(options.maxRedirects === undefined ? {} : { maxRedirects: options.maxRedirects }),
+    ...(options.repeat === undefined ? {} : { repeat: options.repeat }),
   });
   const audit = await runAudit(config);
   const color =
@@ -141,6 +188,38 @@ async function check(urls: readonly string[], options: CliOptions): Promise<void
   }
 
   process.exitCode = reportExitCode(audit.summary, options.failOn);
+}
+
+async function compareReports(
+  baselinePath: string,
+  candidatePath: string,
+  options: CompareCliOptions,
+): Promise<void> {
+  const [baseline, candidate] = await Promise.all([
+    readAuditFile(baselinePath, "baseline"),
+    readAuditFile(candidatePath, "candidate"),
+  ]);
+  const comparison = compareAudits(baseline, candidate, {
+    baselineLabel: basename(baselinePath),
+    candidateLabel: basename(candidatePath),
+    timingRegressionMs: options.timingRegressionMs,
+    timingRegressionPercent: options.timingRegressionPercent,
+  });
+  const color =
+    options.color &&
+    !options.output &&
+    Boolean(process.stdout.isTTY) &&
+    !Reflect.has(process.env, "NO_COLOR");
+  const report = renderComparisonReport(comparison, options.format, { color });
+
+  if (options.output) {
+    await writeReport(options.output, report);
+    process.stderr.write(`SSRWire wrote ${options.format} comparison to ${options.output}\n`);
+  } else {
+    process.stdout.write(report);
+  }
+
+  process.exitCode = options.failOn === "regression" && comparison.summary.regressions > 0 ? 1 : 0;
 }
 
 async function initialize(path: string, force: boolean): Promise<void> {
@@ -164,25 +243,44 @@ export async function main(argv: readonly string[] = process.argv): Promise<void
   const program = new Command();
   program
     .name("ssrwire")
-    .description("Inspect streamed SSR HTML and crawler-specific metadata delivery.")
+    .description("Inspect streamed SSR HTML, SEO, and social metadata delivery.")
     .version(VERSION)
     .exitOverride()
     .showHelpAfterError();
 
-  addCheckOptions(program)
-    .argument("[urls...]", "HTTP or HTTPS URLs to inspect")
-    .action(async (urls: string[], _options: CliOptions, command: Command) => {
-      await check(urls, optionsFrom(command));
-    });
-
   addCheckOptions(
     program
-      .command("check")
+      .command("check", { isDefault: true })
       .description("inspect one or more SSR responses")
       .argument("[urls...]", "HTTP or HTTPS URLs to inspect"),
   ).action(async (urls: string[], _options: CliOptions, command: Command) => {
     await check(urls, optionsFrom(command));
   });
+
+  program
+    .command("compare")
+    .description("compare two SSRWire JSON audit reports")
+    .argument("<baseline>", "baseline JSON audit report")
+    .argument("<candidate>", "candidate JSON audit report")
+    .option("-f, --format <format>", "terminal, json, or html", parseComparisonFormat, "terminal")
+    .option("-o, --output <path>", "write the comparison to a file")
+    .option("--fail-on <level>", "regression or never", parseComparisonFailOn, "regression")
+    .option(
+      "--timing-regression-ms <ms>",
+      "minimum absolute median slowdown",
+      parseNonNegativeNumber,
+      250,
+    )
+    .option(
+      "--timing-regression-percent <percent>",
+      "minimum relative median slowdown",
+      parseNonNegativeNumber,
+      25,
+    )
+    .option("--no-color", "disable terminal colors")
+    .action(async (baselinePath: string, candidatePath: string, options: CompareCliOptions) => {
+      await compareReports(baselinePath, candidatePath, options);
+    });
 
   program
     .command("init")
