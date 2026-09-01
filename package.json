@@ -79,7 +79,7 @@
     "fsevents": false
   },
   "dependencies": {
-    "commander": "14.0.0",
+    "commander": "15.0.0",
     "htmlparser2": "10.0.0",
     "yaml": "2.9.0",
     "zod": "4.4.3"
