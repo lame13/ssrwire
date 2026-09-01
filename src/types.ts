@@ -48,7 +48,7 @@ export interface DocumentSignals {
   readonly descriptions: readonly ElementSignal[];
   readonly canonicals: readonly ElementSignal[];
   readonly robots: readonly RobotsSignal[];
-  /** Present on probes produced by SSRWire 0.3.0 and newer. */
+  /** Present on current probes; optional for low-level callers and older in-memory results. */
   readonly socialMetadata?: readonly SocialMetadataSignal[];
   readonly h1s: readonly ElementSignal[];
   readonly firstMainText?: ElementSignal;
@@ -135,6 +135,8 @@ export interface TargetExpectations {
 }
 
 export interface AuditTarget {
+  /** Stable identity used to match the same target across reports with different origins. */
+  readonly id?: string;
   readonly url: string;
   readonly expectations: TargetExpectations;
 }
@@ -211,6 +213,8 @@ export interface AuditSummary {
 }
 
 export interface AuditResult {
+  /** Version of the persisted audit-report contract, independent of the package version. */
+  readonly schemaVersion: 1;
   readonly version: string;
   readonly generatedAt: string;
   readonly durationMs: number;
@@ -220,3 +224,95 @@ export interface AuditResult {
 }
 
 export type ReportFormat = "terminal" | "json" | "sarif";
+
+export type ComparisonKind = "regression" | "fixed" | "changed";
+
+export type ComparisonScope = "target" | "agent" | "finding" | "response" | "metadata" | "timing";
+
+export interface ComparisonChange {
+  readonly kind: ComparisonKind;
+  readonly scope: ComparisonScope;
+  readonly code: string;
+  readonly message: string;
+  readonly agent?: string;
+  readonly field?: string;
+  readonly baseline?: string | number | boolean;
+  readonly candidate?: string | number | boolean;
+}
+
+export interface ComparisonTimelineEvent {
+  readonly key: string;
+  readonly label: string;
+  readonly medianMs: number;
+  readonly location?: ElementLocation | "mixed";
+  readonly observedByByte?: number;
+}
+
+export interface ComparisonTimelineSnapshot {
+  readonly samples: number;
+  readonly events: readonly ComparisonTimelineEvent[];
+}
+
+export interface ComparisonTimelineLane {
+  readonly agent: string;
+  readonly label: string;
+  readonly baseline?: ComparisonTimelineSnapshot;
+  readonly candidate?: ComparisonTimelineSnapshot;
+}
+
+export type TargetComparisonStatus = "matched" | "added" | "removed";
+
+export interface TargetComparison {
+  readonly key: string;
+  readonly id?: string;
+  readonly status: TargetComparisonStatus;
+  readonly baselineUrl?: string;
+  readonly candidateUrl?: string;
+  readonly changes: readonly ComparisonChange[];
+  readonly timelines: readonly ComparisonTimelineLane[];
+}
+
+export interface AuditReportDescriptor {
+  readonly label: string;
+  readonly version: string;
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly repeat: number;
+}
+
+export interface ComparisonThresholds {
+  readonly timingRegressionMs: number;
+  readonly timingRegressionPercent: number;
+}
+
+export interface ComparisonSummary {
+  readonly targets: number;
+  readonly matchedTargets: number;
+  readonly addedTargets: number;
+  readonly removedTargets: number;
+  readonly unchangedTargets: number;
+  readonly regressions: number;
+  readonly fixed: number;
+  readonly changed: number;
+}
+
+export interface AuditComparison {
+  readonly schemaVersion: 1;
+  readonly kind: "comparison";
+  readonly version: string;
+  readonly generatedAt: string;
+  readonly baseline: AuditReportDescriptor;
+  readonly candidate: AuditReportDescriptor;
+  readonly thresholds: ComparisonThresholds;
+  readonly results: readonly TargetComparison[];
+  readonly summary: ComparisonSummary;
+}
+
+export interface CompareAuditOptions {
+  readonly baselineLabel?: string;
+  readonly candidateLabel?: string;
+  readonly timingRegressionMs?: number;
+  readonly timingRegressionPercent?: number;
+}
+
+export type ComparisonReportFormat = "terminal" | "json" | "html";

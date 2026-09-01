@@ -5,6 +5,28 @@ All notable changes to SSRWire are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-01
+
+### Added
+
+- Offline `ssrwire compare` for two redacted JSON audits, with stable target IDs
+  for matching the same route across production and preview origins.
+- Regression, fixed, and neutral-change classification for policy findings,
+  completion, HTTP delivery, metadata values and locations, agent coverage, and
+  redirect evidence.
+- Dual-floor median timing comparisons with configurable absolute and relative
+  thresholds.
+- Terminal and deterministic JSON comparison reports plus a self-contained,
+  script-free HTML wire waterfall.
+- Public comparison, report-validation, and comparison-reporter APIs.
+
+### Changed
+
+- JSON audits now include an explicit `schemaVersion: 1` persisted-report
+  contract independent of the SSRWire package version.
+- Target objects accept an optional unique `id`; exact URL matching remains the
+  fallback when an ID is absent.
+
 ## [0.3.0] - 2026-08-28
 
 ### Added
@@ -58,7 +80,8 @@ All notable changes to SSRWire are documented here. The project follows
 - Terminal, JSON, and SARIF reports with CI-safe exit codes.
 - YAML configuration, one-off URL checks, Docker support, and GitHub Actions examples.
 
-[Unreleased]: https://github.com/lame13/ssrwire/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/lame13/ssrwire/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/lame13/ssrwire/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lame13/ssrwire/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lame13/ssrwire/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lame13/ssrwire/releases/tag/v0.1.0

@@ -1,4 +1,4 @@
-# Publish SSRWire 0.3.0 from a local machine
+# Publish SSRWire 0.4.0 from a local machine
 
 This repository intentionally includes no npm publishing workflow. Publish from
 a foreground local terminal only after the GitHub `CI` workflow passes. Do not
@@ -10,7 +10,7 @@ request, and do not use an administrator bypass or a direct push to `main`.
 
 ## 1. Update the existing repository
 
-Work from a clean clone of the existing public repository. Copy the 0.3.0
+Work from a clean clone of the existing public repository. Copy the 0.4.0
 source files into that clone while preserving its `.git` directory.
 
 ```bash
@@ -18,7 +18,7 @@ cd ssrwire
 git switch main
 git pull --ff-only origin main
 git status --short
-git switch -c release/0.3.0
+git switch -c release/0.4.0
 ```
 
 `git status --short` must be empty before creating the release branch and
@@ -36,7 +36,7 @@ npm pack --dry-run
 node dist/bin.js --version
 ```
 
-The final command must print `0.3.0`. Inspect the dry-run file list. It must not
+The final command must print `0.4.0`. Inspect the dry-run file list. It must not
 contain `.env`, `.github`, `node_modules`, `test`, ZIP files, or tarballs.
 
 Review the release diff and version references:
@@ -45,7 +45,7 @@ Review the release diff and version references:
 git diff --check
 git diff --stat
 git diff -- package.json package-lock.json CHANGELOG.md README.md PUBLISHING.md
-rg '0\.2\.0' README.md examples package.json package-lock.json scripts src test
+rg '0\.3\.0' README.md examples package.json package-lock.json scripts src test
 ```
 
 The final search should return nothing. Historical entries in `CHANGELOG.md`
@@ -58,10 +58,10 @@ gh auth status -h github.com || gh auth login -h github.com --web
 git add --all
 git diff --cached --check
 git diff --cached --stat
-git commit -m "feat: release SSRWire 0.3.0"
-git push --set-upstream origin release/0.3.0
-gh pr create --base main --head release/0.3.0 --fill
-PR_NUMBER="$(gh pr view release/0.3.0 --json number --jq .number)"
+git commit -m "feat: release SSRWire 0.4.0"
+git push --set-upstream origin release/0.4.0
+gh pr create --base main --head release/0.4.0 --fill
+PR_NUMBER="$(gh pr view release/0.4.0 --json number --jq .number)"
 test -n "$PR_NUMBER"
 gh pr checks "$PR_NUMBER" --watch --fail-fast
 ```
@@ -102,8 +102,8 @@ npm config get registry
 npm config get provenance
 ```
 
-The published version and `latest` tag must still be `0.2.0`. If npm already
-reports `0.3.0`, stop: never reuse a version that npm accepted.
+The published version and `latest` tag must still be `0.3.0`. If npm already
+reports `0.4.0`, stop: never reuse a version that npm accepted.
 
 In the npm package settings, select **Require two-factor authentication and
 disallow tokens**. npm documents this as the strongest package publishing
@@ -132,7 +132,7 @@ or add an npm credential to the repository or GitHub Actions. The package-level
 "disallow tokens" setting ensures that publication remains interactive.
 
 If npm's publish-time scanning delays package visibility, wait. Do not publish
-`0.3.0` again or change the tag to work around propagation.
+`0.4.0` again or change the tag to work around propagation.
 
 ## 6. Tag the exact published commit
 
@@ -140,9 +140,9 @@ If npm's publish-time scanning delays package visibility, wait. Do not publish
 node scripts/clean.mjs
 rm -rf node_modules/.vite
 git status --short
-git tag -a v0.3.0 -m "SSRWire v0.3.0"
-git push origin v0.3.0
-gh release create v0.3.0 --generate-notes --title "SSRWire v0.3.0"
+git tag -a v0.4.0 -m "SSRWire v0.4.0"
+git push origin v0.4.0
+gh release create v0.4.0 --generate-notes --title "SSRWire v0.4.0"
 ```
 
 `git status --short` must print nothing before tagging.

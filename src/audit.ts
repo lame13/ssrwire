@@ -1,4 +1,5 @@
 import { analyzeTarget, summarizeAudit } from "./analyze.js";
+import { AUDIT_SCHEMA_VERSION } from "./audit-report.js";
 import { probeUrl } from "./http-probe.js";
 import { redactAudit } from "./redact.js";
 import { analyzeStability } from "./stability.js";
@@ -186,6 +187,7 @@ export async function runAudit(config: SsrWireConfig): Promise<AuditResult> {
   });
 
   const audit: AuditResult = {
+    schemaVersion: AUDIT_SCHEMA_VERSION,
     version: VERSION,
     generatedAt: new Date().toISOString(),
     durationMs: Math.round(performance.now() - started),

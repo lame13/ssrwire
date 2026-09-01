@@ -30,6 +30,10 @@ const requireSchema = z
 
 const targetObjectSchema = z
   .object({
+    id: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/i)
+      .optional(),
     url: z.string().min(1),
     expectedStatus: z
       .union([
@@ -138,6 +142,7 @@ function normalizeTarget(value: string | z.infer<typeof targetObjectSchema>): Au
   };
 
   return {
+    ...(item.id === undefined ? {} : { id: item.id }),
     url: validateHttpUrl(item.url, "target URL"),
     expectations,
   };
@@ -259,13 +264,22 @@ async function readConfig(path: string | undefined): Promise<FileConfig> {
 
 function uniqueTargets(targets: readonly AuditTarget[]): readonly AuditTarget[] {
   const seen = new Set<string>();
-  return targets.filter((target) => {
+  const unique = targets.filter((target) => {
     if (seen.has(target.url)) {
       return false;
     }
     seen.add(target.url);
     return true;
   });
+  const ids = new Set<string>();
+  for (const target of unique) {
+    if (target.id === undefined) continue;
+    if (ids.has(target.id)) {
+      throw new ConfigError(`Target id ${target.id} is duplicated.`);
+    }
+    ids.add(target.id);
+  }
+  return unique;
 }
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWireConfig> {

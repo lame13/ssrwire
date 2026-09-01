@@ -1,6 +1,7 @@
 # Replace these URLs with a small set of high-value SSR routes.
 targets:
-  - url: https://example.com/
+  - id: home
+    url: https://example.com/
     expectedStatus: 200
     expectedFinalUrl: https://example.com/
     require:
@@ -12,7 +13,8 @@ targets:
       openGraph: true
       twitterCard: true
 
-  - url: https://example.com/pricing/
+  - id: pricing
+    url: https://example.com/pricing/
     expectedStatus: 200
     require:
       title: true

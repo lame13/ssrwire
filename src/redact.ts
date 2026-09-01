@@ -156,6 +156,7 @@ export function redactAudit(audit: AuditResult, secrets: readonly string[]): Aud
     results: audit.results.map((result) => ({
       target: {
         ...result.target,
+        ...(result.target.id === undefined ? {} : { id: redactText(result.target.id, plan) }),
         url: redactText(result.target.url, plan),
         expectations: {
           ...result.target.expectations,

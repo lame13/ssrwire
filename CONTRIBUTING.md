@@ -26,13 +26,14 @@ before opening a pull request, then run `npm run check` again.
 Keep each change narrow. Include tests for behavior changes, especially for:
 
 - response chunk boundaries and elements split across chunks;
+- persisted audit-report validation, target matching, and comparison classification;
 - redirects, timeouts, aborted bodies, and size limits;
 - malformed, duplicated, late, or body-located metadata;
 - Open Graph and Twitter Card requirements, fallbacks, arrays, and URL values;
 - user-agent differences and comparison findings;
 - repeated-sample ordering, aggregation, and instability classification;
 - redaction of configured header values;
-- terminal, JSON, SARIF, and exit-code behavior.
+- terminal, JSON, SARIF, comparison HTML, and exit-code behavior.
 
 Do not make timing tests depend on exact millisecond values. Shared runners and
 local machines have unavoidable scheduling variance. Test ordering,
