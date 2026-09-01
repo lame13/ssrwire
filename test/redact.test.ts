@@ -88,12 +88,14 @@ describe("redactProbe", () => {
     const secret = "preview-token-987";
     const probe = fixture();
     const audit: AuditResult = {
-      version: "0.3.0",
+      schemaVersion: 1,
+      version: "0.4.0",
       generatedAt: "2026-08-22T00:00:00.000Z",
       durationMs: 1,
       results: [
         {
           target: {
+            id: secret,
             url: `https://example.com/?token=${secret}`,
             expectations: {
               statuses: [200],
@@ -144,7 +146,8 @@ describe("redactProbe", () => {
   it("preserves typed control fields when a header value matches an enum", () => {
     const probe = fixture();
     const audit: AuditResult = {
-      version: "0.3.0",
+      schemaVersion: 1,
+      version: "0.4.0",
       generatedAt: "2026-08-22T00:00:00.000Z",
       durationMs: 1,
       results: [

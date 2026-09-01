@@ -85,6 +85,65 @@ npx ssrwire check \
 The root command and `check` are equivalent, so `npx ssrwire URL` is the short
 form of `npx ssrwire check URL`.
 
+## Compare deployments
+
+SSRWire can compare two JSON audits without making more network requests. Give
+the same logical target a stable `id` in each environment so reports can match
+across different origins:
+
+```yaml
+# production.yml
+targets:
+  - id: home
+    url: https://www.example.com/
+  - id: pricing
+    url: https://www.example.com/pricing/
+```
+
+```yaml
+# preview.yml
+targets:
+  - id: home
+    url: https://preview.example.net/
+  - id: pricing
+    url: https://preview.example.net/pricing/
+```
+
+Capture and compare the already-redacted reports:
+
+```bash
+npx ssrwire check --config production.yml --format json --output production.json
+npx ssrwire check --config preview.yml --format json --output preview.json
+
+npx ssrwire compare production.json preview.json
+npx ssrwire compare production.json preview.json \
+  --format html \
+  --output ssrwire-diff.html
+```
+
+The comparison classifies candidate-only warning/error findings and newly
+incomplete probes as regressions, resolved findings and material timing
+improvements as fixed, and response or metadata differences as neutral changes.
+A metadata change becomes a regression when it causes a candidate policy
+finding, such as required metadata disappearing or head-only crawler metadata
+moving into the body.
+
+Timing regressions use per-agent medians and require both an absolute increase
+over 250 ms and a relative increase over 25% by default. Both floors are
+configurable on `compare`; small timing differences remain visible in the HTML
+waterfall without making CI noisy. `--fail-on regression` is the comparison
+default, while `--fail-on never` always exits successfully after valid reports
+are compared.
+
+The HTML report is one self-contained, script-free file with synchronized
+baseline and candidate milestones. It never embeds raw response HTML. SSRWire
+does not create or update baseline files automatically.
+
+Reports without target IDs match by exact target URL. IDs must be unique within
+one report, so an ID mismatch is shown as one removed and one added target
+instead of being guessed. Comparison requires the explicit `schemaVersion: 1`
+audit contract emitted by SSRWire 0.4.0.
+
 ## What it observes
 
 For each target, agent, and configured sample, SSRWire captures:
@@ -208,7 +267,8 @@ takes precedence.
 
 ```yaml
 targets:
-  - url: https://example.com/
+  - id: home
+    url: https://example.com/
     expectedStatus: 200
     expectedFinalUrl: https://example.com/
     require:
@@ -222,7 +282,8 @@ targets:
     maxFirstByteMs: 1200
     maxCriticalMs: 2500
 
-  - url: https://example.com/not-found/
+  - id: not-found
+    url: https://example.com/not-found/
     expectedStatus: [404]
     require:
       title: true
@@ -255,6 +316,10 @@ targets:
   - https://example.com/
   - https://example.com/pricing/
 ```
+
+Use the object form with a stable `id` when reports from different origins will
+be compared. IDs are 1–64 ASCII letters, digits, dots, underscores, or hyphens,
+and must start with a letter or digit.
 
 Defaults:
 
@@ -365,6 +430,7 @@ dynamic values commonly change source HTML.
 ```text
 ssrwire [urls...] [options]
 ssrwire check [urls...] [options]
+ssrwire compare <baseline.json> <candidate.json> [options]
 ssrwire init [path] [--force]
 ```
 
@@ -387,6 +453,17 @@ Check options:
 Config-file targets and CLI URLs are combined, with exact duplicate URLs
 removed.
 
+Comparison options:
+
+| Option | Purpose |
+|---|---|
+| `-f, --format <format>` | `terminal`, `json`, or self-contained `html` |
+| `-o, --output <path>` | Write the comparison to a file |
+| `--fail-on <level>` | `regression` or `never` |
+| `--timing-regression-ms <ms>` | Absolute median slowdown floor; default `250` |
+| `--timing-regression-percent <percent>` | Relative median slowdown floor; default `25` |
+| `--no-color` | Disable terminal color |
+
 ## Reports and exit codes
 
 - `terminal`: compact sample, social-readiness, aggregate-timing, and finding
@@ -395,6 +472,8 @@ removed.
   signal plus repeated-run stability summaries.
 - `sarif`: findings suitable for GitHub Code Scanning and other SARIF 2.1.0
   consumers.
+- comparison `html`: a script-free deployment summary and per-agent wire
+  waterfall suitable for a CI artifact.
 
 Exit codes are stable:
 
@@ -402,7 +481,11 @@ Exit codes are stable:
 - `1`: the run completed but crossed the `--fail-on` threshold;
 - `2`: configuration/setup failure or incomplete probe evidence.
 
-`--fail-on never` suppresses policy failures, but it never converts an
+For `compare`, exit `1` means at least one regression was introduced under the
+default policy, while invalid or unreadable reports use exit `2`. Neutral
+changes and fixed findings do not fail comparison.
+
+`check --fail-on never` suppresses policy failures, but it never converts an
 incomplete probe into a pass.
 
 ## GitHub Actions
@@ -460,9 +543,29 @@ const audit = await runAudit(config);
 process.stdout.write(renderJson(audit));
 ```
 
-Treat the JSON report's top-level `version` as the SSRWire software version,
-not a promise that every nested field will remain unchanged across major
-versions.
+Comparisons use the same primitives as the CLI:
+
+```ts
+import { readFile } from "node:fs/promises";
+import {
+  compareAudits,
+  parseAuditReportText,
+  renderComparisonHtml,
+} from "ssrwire";
+
+const [baselineJson, candidateJson] = await Promise.all([
+  readFile("production.json", "utf8"),
+  readFile("preview.json", "utf8"),
+]);
+const baseline = parseAuditReportText(baselineJson, "baseline audit report");
+const candidate = parseAuditReportText(candidateJson, "candidate audit report");
+const comparison = compareAudits(baseline, candidate);
+const html = renderComparisonHtml(comparison);
+```
+
+The JSON report's top-level `version` is the SSRWire software version.
+`schemaVersion` separately identifies the persisted report contract used by
+offline comparison.
 
 ## Scope
 

@@ -28,7 +28,8 @@ describe("loadConfig", () => {
     await writeFile(
       join(cwd, "ssrwire.config.yml"),
       `targets:
-  - url: https://example.com/path#section
+  - id: product-page
+    url: https://example.com/path#section
     expectedStatus: [200, 404, 200]
     require:
       description: false
@@ -48,6 +49,7 @@ timeoutMs: 5000
     const config = await loadConfig({ cwd });
 
     expect(config.targets[0]?.url).toBe("https://example.com/path");
+    expect(config.targets[0]?.id).toBe("product-page");
     expect(config.targets[0]?.expectations.statuses).toEqual([200, 404]);
     expect(config.targets[0]?.expectations.requireDescription).toBe(false);
     expect(config.targets[0]?.expectations.requireOpenGraph).toBe(true);
@@ -146,5 +148,20 @@ timeoutMs: 5000
     await expect(loadConfig({ urls: ["https://example.com"], repeat: 11 })).rejects.toThrow(
       "repeat must be an integer between 1 and 10",
     );
+  });
+
+  it("rejects duplicate stable target ids", async () => {
+    const cwd = await temporaryDirectory();
+    await writeFile(
+      join(cwd, "ssrwire.config.yml"),
+      `targets:
+  - id: shared
+    url: https://example.com/a
+  - id: shared
+    url: https://example.com/b
+`,
+    );
+
+    await expect(loadConfig({ cwd })).rejects.toThrow("Target id shared is duplicated");
   });
 });
