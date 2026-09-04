@@ -89,7 +89,7 @@ describe("redactProbe", () => {
     const probe = fixture();
     const audit: AuditResult = {
       schemaVersion: 1,
-      version: "0.4.0",
+      version: "0.4.1",
       generatedAt: "2026-08-22T00:00:00.000Z",
       durationMs: 1,
       results: [
@@ -147,7 +147,7 @@ describe("redactProbe", () => {
     const probe = fixture();
     const audit: AuditResult = {
       schemaVersion: 1,
-      version: "0.4.0",
+      version: "0.4.1",
       generatedAt: "2026-08-22T00:00:00.000Z",
       durationMs: 1,
       results: [

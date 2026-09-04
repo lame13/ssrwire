@@ -9,7 +9,7 @@ import type { AuditResult } from "../src/types.js";
 
 const emptyAudit: AuditResult = {
   schemaVersion: 1,
-  version: "0.4.0",
+  version: "0.4.1",
   generatedAt: "2026-09-01T00:00:00.000Z",
   durationMs: 0,
   results: [],

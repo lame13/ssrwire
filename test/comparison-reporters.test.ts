@@ -11,18 +11,18 @@ const control = "\u001B]52;c;dG9rZW4=\u0007";
 const comparison: AuditComparison = {
   schemaVersion: 1,
   kind: "comparison",
-  version: "0.4.0",
+  version: "0.4.1",
   generatedAt: "2026-09-01T01:00:00.000Z",
   baseline: {
     label: "production.json",
-    version: "0.4.0",
+    version: "0.4.1",
     schemaVersion: 1,
     generatedAt: "2026-09-01T00:00:00.000Z",
     repeat: 3,
   },
   candidate: {
     label: "</title><script>alert(1)</script>",
-    version: "0.4.0",
+    version: "0.4.1",
     schemaVersion: 1,
     generatedAt: "2026-09-01T00:30:00.000Z",
     repeat: 3,
@@ -114,7 +114,7 @@ describe("comparison reporters", () => {
   it("renders a colorless terminal diff and escapes control sequences", () => {
     const output = renderComparisonTerminal(comparison, { color: false });
 
-    expect(output).toContain("SSRWire 0.4.0 comparison");
+    expect(output).toContain("SSRWire 0.4.1 comparison");
     expect(output).toContain("REGRESS head-metadata-in-body [twitterbot]");
     expect(output).toContain("FIXED   missing-description");
     expect(output).toContain("1 regression(s), 1 fixed, 1 changed");

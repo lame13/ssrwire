@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const node = process.execPath;
 const npmCli = process.env.npm_execpath;
-const expectedVersion = "0.4.0";
+const expectedVersion = "0.4.1";
 
 if (!npmCli) {
   throw new Error("npm_execpath is unavailable. Run this check with npm run package:check.");

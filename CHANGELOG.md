@@ -5,6 +5,18 @@ All notable changes to SSRWire are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-04
+
+### Changed
+
+- Updated the runtime dependencies to Commander 15.0.0, htmlparser2 12.0.0,
+  and Zod 4.5.4. Commander 15's ESM-only and Node.js 22.12 requirements match
+  SSRWire's existing package contract.
+- Updated development tooling to Biome 2.5.11, tsx 4.23.13, and Vitest
+  4.1.11, and updated the Docker base image to Node.js 26.
+- Disabled npm audit and funding network requests during Docker dependency
+  installation and pruning to keep image builds within the CI time limit.
+
 ## [0.4.0] - 2026-09-01
 
 ### Added
@@ -80,7 +92,8 @@ All notable changes to SSRWire are documented here. The project follows
 - Terminal, JSON, and SARIF reports with CI-safe exit codes.
 - YAML configuration, one-off URL checks, Docker support, and GitHub Actions examples.
 
-[Unreleased]: https://github.com/lame13/ssrwire/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/lame13/ssrwire/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/lame13/ssrwire/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/lame13/ssrwire/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lame13/ssrwire/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lame13/ssrwire/compare/v0.1.0...v0.2.0

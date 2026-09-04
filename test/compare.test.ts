@@ -89,7 +89,7 @@ function audit(results: readonly TargetAuditResult[], repeat = 1): AuditResult {
   const probes = results.flatMap((item) => item.probes);
   return {
     schemaVersion: 1,
-    version: "0.4.0",
+    version: "0.4.1",
     generatedAt: "2026-09-01T00:00:00.000Z",
     durationMs: 100,
     ...(repeat === 1 ? {} : { repeat }),

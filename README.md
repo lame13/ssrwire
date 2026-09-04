@@ -142,7 +142,7 @@ does not create or update baseline files automatically.
 Reports without target IDs match by exact target URL. IDs must be unique within
 one report, so an ID mismatch is shown as one removed and one added target
 instead of being guessed. Comparison requires the explicit `schemaVersion: 1`
-audit contract emitted by SSRWire 0.4.0.
+audit contract emitted by SSRWire 0.4.1.
 
 ## What it observes
 
