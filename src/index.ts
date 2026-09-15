@@ -18,7 +18,11 @@ export { loadConfig, parseHeaderOption } from "./config.js";
 export { probeUrl } from "./http-probe.js";
 export { redactProbe } from "./redact.js";
 export { renderJson, renderReport, renderSarif, renderTerminal } from "./reporters.js";
-export { createStreamInspector } from "./stream-parser.js";
+export {
+  createStreamInspector,
+  type StreamInspector,
+  type StreamInspectorOptions,
+} from "./stream-parser.js";
 export type {
   AgentProfile,
   AgentStability,

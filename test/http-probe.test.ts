@@ -198,11 +198,55 @@ describe("probeUrl", () => {
 
     expect(result.completion).toBe("max-bytes-exceeded");
     expect(result.bytesRead).toBe(80);
-    expect(result.bodySha256).toBe(
-      createHash("sha256").update(Buffer.from(body).subarray(0, 80)).digest("hex"),
-    );
+    // A truncated prefix must not be published as if it were a complete-body fingerprint.
+    expect(result.bodySha256).toBeUndefined();
     expect(result.signals.title?.value).toBe("Large");
     expect(result.timings.completeMs).toBeUndefined();
+  });
+
+  it("omits the body fingerprint when a probe times out mid-stream", async () => {
+    const { origin } = await listen((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.flushHeaders();
+      response.write("<html><head><title>Partial</title></head><body>");
+      const timer = setTimeout(() => response.end("</body></html>"), 250);
+      response.once("close", () => clearTimeout(timer));
+    });
+
+    const result = await probeUrl({ ...baseOptions(origin), timeoutMs: 40 });
+
+    expect(result.completion).toBe("timeout");
+    expect(result.bytesRead).toBeGreaterThan(0);
+    expect(result.bodySha256).toBeUndefined();
+  });
+
+  it("decodes a legacy response charset declared in Content-Type", async () => {
+    const html =
+      "<html><head><title>Café ünïcode</title>" +
+      '<meta name="description" content="Résumé of the page"></head><body></body></html>';
+    const { origin } = await listen((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=windows-1252" });
+      response.end(Buffer.from(html, "latin1"));
+    });
+
+    const result = await probeUrl(baseOptions(origin));
+
+    expect(result.completion).toBe("complete");
+    expect(result.signals.title?.value).toBe("Café ünïcode");
+    expect(result.signals.descriptions[0]?.value).toBe("Résumé of the page");
+  });
+
+  it("ignores charset-like text inside another Content-Type parameter", async () => {
+    const { origin } = await listen((_request, response) => {
+      response.writeHead(200, {
+        "content-type": 'text/html; profile="example;charset=windows-1252"; charset="utf-8"',
+      });
+      response.end("<title>Café</title>");
+    });
+
+    const result = await probeUrl(baseOptions(origin));
+
+    expect(result.signals.title?.value).toBe("Café");
   });
 
   it("returns partial signals on timeout without exposing custom header values", async () => {

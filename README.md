@@ -142,7 +142,7 @@ does not create or update baseline files automatically.
 Reports without target IDs match by exact target URL. IDs must be unique within
 one report, so an ID mismatch is shown as one removed and one added target
 instead of being guessed. Comparison requires the explicit `schemaVersion: 1`
-audit contract emitted by SSRWire 0.4.0.
+audit contract emitted by SSRWire 0.4.0 and later.
 
 ## What it observes
 
@@ -333,7 +333,9 @@ Defaults:
 - samples per target and agent: 1, with an allowed range of 1–10.
 
 Unknown configuration keys are rejected. URLs must be absolute HTTP or HTTPS
-URLs and cannot contain embedded credentials.
+URLs and cannot contain embedded credentials. Declaring one URL twice with
+different expectations or target IDs is rejected instead of silently keeping
+the first contract.
 
 ### Protected previews
 
@@ -366,8 +368,11 @@ them. Direct low-level `probeUrl()` callers should apply `redactProbe()` before
 persisting results.
 
 The final response must declare `text/html` or `application/xhtml+xml` as its
-`Content-Type`; parameters such as `charset=utf-8` are allowed. SSRWire does not
-sniff headerless, JSON, text, or binary responses for HTML-looking fragments.
+`Content-Type`; parameters such as `charset=utf-8` are allowed. SSRWire decodes
+the body using a leading byte-order mark first, then a supported charset from
+that parameter, then an in-document encoding declaration found within the first
+1024 bytes, and otherwise UTF-8. SSRWire does not sniff headerless,
+JSON, text, or binary responses for HTML-looking fragments.
 
 To keep hostile or accidentally huge pages bounded, SSRWire retains at most
 256 signals of each repeated metadata kind, including each supported social

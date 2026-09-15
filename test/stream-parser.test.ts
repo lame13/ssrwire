@@ -221,4 +221,146 @@ describe("createStreamInspector", () => {
     expect(inspector.finish(99)).toBe(first);
     expect(() => inspector.write(Buffer.from("later"), 6)).toThrow(/finished/u);
   });
+
+  it("decodes a charset declared inside the document when the response declares none", () => {
+    const html =
+      '<html><head><meta charset="windows-1252"><title>Café ünïcode</title>' +
+      '<meta name="description" content="Résumé of the page"></head><body></body></html>';
+    const encoded = Buffer.from(html, "latin1");
+    const inspector = createStreamInspector();
+    // Split inside the declaration so the decoder has to wait for buffered bytes.
+    inspector.write(encoded.subarray(0, 32), 7);
+    inspector.write(encoded.subarray(32), 11);
+
+    const signals = inspector.end(13);
+
+    expect(signals.title).toMatchObject({ value: "Café ünïcode", location: "head", atMs: 11 });
+    expect(signals.descriptions[0]).toMatchObject({ value: "Résumé of the page" });
+    expect(signals.title?.observedByByte).toBe(encoded.byteLength);
+  });
+
+  it("prefers the response charset over an in-document declaration", () => {
+    const html =
+      '<html><head><meta charset="windows-1252"><title>Café</title></head><body></body></html>';
+    const inspector = createStreamInspector({ charset: "utf-8" });
+    inspector.write(Buffer.from(html, "latin1"), 3);
+
+    const signals = inspector.end(4);
+
+    expect(signals.title?.value).toContain("\uFFFD");
+    expect(signals.title?.value).not.toBe("Café");
+  });
+
+  it("decodes a UTF-16LE document that starts with a byte-order mark", () => {
+    const html = "<html><head><title>Wide</title></head><body></body></html>";
+    const encoded = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(html, "utf16le")]);
+    const inspector = createStreamInspector();
+    inspector.write(encoded, 6);
+
+    const signals = inspector.end(7);
+
+    expect(signals.title?.value).toBe("Wide");
+  });
+
+  it("falls back to UTF-8 for an unsupported charset label", () => {
+    const inspector = createStreamInspector({ charset: "x-not-a-real-encoding" });
+    inspector.write(Buffer.from("<html><head><title>Fallback</title></head></html>"), 3);
+
+    expect(inspector.end(4).title?.value).toBe("Fallback");
+  });
+
+  it("counts buffered bytes as observed and keeps parsing after the sniff window", () => {
+    const inspector = createStreamInspector();
+    const padding = `<html><head>${"<!-- padding -->".repeat(100)}`;
+    inspector.write(Buffer.from(padding), 9);
+
+    expect(inspector.bytesObserved).toBe(Buffer.byteLength(padding));
+    expect(inspector.bytesObserved).toBeGreaterThan(1_024);
+
+    inspector.write(
+      Buffer.from('<meta charset="windows-1252"><title>Late Café</title></head></html>'),
+      12,
+    );
+    const signals = inspector.end(13);
+
+    expect(signals.title).toMatchObject({ value: "Late Café", atMs: 12 });
+  });
+
+  it.each([
+    '<!-- <meta charset="windows-1252"> -->',
+    '<meta name="description" content="charset=windows-1252">',
+    '<meta data-charset="windows-1252">',
+    '<metadata charset="windows-1252"></metadata>',
+    "<script>const example = '<meta charset=\"windows-1252\">';</script>",
+  ])("ignores charset-like text in %s", (prefix) => {
+    const { signals } = feedOneByteAtATime(
+      `<html><head>${prefix}<meta charset="utf-8"><title>Café</title></head></html>`,
+    );
+
+    expect(signals.title?.value).toBe("Café");
+  });
+
+  it("skips unsupported meta labels and accepts a later Content-Type pragma", () => {
+    const inspector = createStreamInspector();
+    inspector.write(
+      Buffer.from(
+        '<meta charset="x-unsupported"><meta content="text/html; charset=windows-1252" ' +
+          'http-equiv="Content-Type"><title>Café</title>',
+        "latin1",
+      ),
+      8,
+    );
+
+    expect(inspector.end().title?.value).toBe("Café");
+  });
+
+  it.each(["utf-16le", "utf-16be"])(
+    "treats an ASCII meta declaration of %s as UTF-8",
+    (charset) => {
+      const { signals } = feedOneByteAtATime(`<meta charset="${charset}"><title>Café</title>`);
+
+      expect(signals.title?.value).toBe("Café");
+    },
+  );
+
+  it("lets a split byte-order mark override the response charset", () => {
+    const inspector = createStreamInspector({ charset: "utf-8" });
+    const bytes = Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from("<title>Café</title>", "utf16le"),
+    ]);
+    for (let index = 0; index < bytes.length; index += 1) {
+      inspector.write(bytes.subarray(index, index + 1), index + 1);
+    }
+
+    expect(inspector.end().title).toMatchObject({
+      value: "Café",
+      atMs: bytes.length,
+      observedByByte: bytes.length,
+    });
+  });
+
+  it.each(["end", "finish"] as const)(
+    "preserves the last arrival time when %s closes buffered HTML",
+    (method) => {
+      const inspector = createStreamInspector();
+      const bytes = Buffer.from("<html><head><title>Unclosed");
+      inspector.write(bytes, 42);
+
+      expect(inspector[method]().title).toMatchObject({
+        value: "Unclosed",
+        atMs: 42,
+        observedByByte: bytes.length,
+      });
+    },
+  );
+
+  it("retains buffered bytes when the caller reuses a chunk after write", () => {
+    const inspector = createStreamInspector();
+    const bytes = Buffer.from("<title>Original</title>");
+    inspector.write(bytes, 7);
+    bytes.fill(0);
+
+    expect(inspector.end().title).toMatchObject({ value: "Original", atMs: 7 });
+  });
 });

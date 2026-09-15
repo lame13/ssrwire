@@ -96,7 +96,7 @@ const targetResult: TargetAuditResult = {
 
 const audit: AuditResult = {
   schemaVersion: 1,
-  version: "0.4.0",
+  version: "0.4.2",
   generatedAt: "2026-08-22T00:00:00.000Z",
   durationMs: 123,
   results: [targetResult],
@@ -107,7 +107,7 @@ describe("renderTerminal", () => {
   it("renders a readable, colorless timing table and finding details", () => {
     const output = renderTerminal(audit, { color: false });
 
-    expect(output).toContain("SSRWire 0.4.0");
+    expect(output).toContain("SSRWire 0.4.2");
     expect(output).toContain("Agent");
     expect(output).toContain("First byte");
     expect(output).toContain("25 ms/head");
@@ -267,6 +267,118 @@ describe("structured reporters", () => {
       "https://example.com/page",
     );
     expect(output.endsWith("\n")).toBe(true);
+  });
+
+  it("fingerprints SARIF findings so Code Scanning keeps alerts stable and distinct", () => {
+    const finding = targetResult.findings[0];
+    if (!finding) throw new Error("Fixture finding is missing.");
+    const parseSarif = (value: string) =>
+      JSON.parse(value) as {
+        runs: Array<{
+          tool: { driver: { rules: Array<{ id: string; helpUri?: string }> } };
+          results: Array<{ partialFingerprints?: Record<string, string> }>;
+        }>;
+      };
+
+    const twoAgents: AuditResult = {
+      ...audit,
+      results: [
+        {
+          ...targetResult,
+          findings: [
+            { ...finding, agent: "googlebot" },
+            { ...finding, agent: "twitterbot" },
+          ],
+        },
+      ],
+    };
+
+    const output = renderSarif(twoAgents);
+    const sarif = parseSarif(output);
+    const results = sarif.runs[0]?.results ?? [];
+    const fingerprints = results.map((result) => result.partialFingerprints?.["ssrwireFinding/v1"]);
+
+    expect(results).toHaveLength(2);
+    expect(new Set(fingerprints).size).toBe(2);
+    expect(fingerprints.every((value) => /^[a-f0-9]{64}$/u.test(value ?? ""))).toBe(true);
+    expect(sarif.runs[0]?.tool.driver.rules[0]?.helpUri).toMatch(/README\.md#/u);
+    expect(renderSarif(twoAgents)).toBe(output);
+
+    // Volatile evidence changes between runs; it must not change an alert's identity.
+    const drifted: AuditResult = {
+      ...twoAgents,
+      results: [
+        {
+          ...targetResult,
+          findings: [
+            { ...finding, agent: "googlebot", evidence: { observed: false, count: 99 } },
+            { ...finding, agent: "twitterbot" },
+          ],
+        },
+      ],
+    };
+
+    expect(parseSarif(renderSarif(drifted)).runs[0]?.results[0]?.partialFingerprints).toEqual(
+      results[0]?.partialFingerprints,
+    );
+  });
+
+  it("keeps SARIF identity stable across observed values and repeated-sample evidence", () => {
+    const fingerprints = (evidence: Readonly<Record<string, string | number | boolean>>) => {
+      const output = JSON.parse(
+        renderSarif({
+          ...audit,
+          results: [
+            {
+              ...targetResult,
+              findings: [
+                {
+                  code: "invalid-social-url",
+                  severity: "warning",
+                  message: "Invalid social URL.",
+                  url: targetResult.target.url,
+                  agent: "googlebot",
+                  evidence,
+                },
+              ],
+            },
+          ],
+        }),
+      ) as { runs: Array<{ results: Array<{ partialFingerprints: Record<string, string> }> }> };
+      return output.runs[0]?.results[0]?.partialFingerprints;
+    };
+    const baseline = fingerprints({ property: "og:url" });
+
+    expect(
+      fingerprints({
+        property: "og:url",
+        value: "/first",
+        actual: "https://example.com/redirect-one",
+        observed: false,
+        errors: "Unexpected token at position 5",
+        error: "Response exceeded the 100 byte limit.",
+        reasons: "Analysis limit reached.",
+        observedMs: 10,
+        distinctValues: 2,
+      }),
+    ).toEqual(baseline);
+    expect(
+      fingerprints({
+        property: "og:url",
+        value: "/second",
+        actual: "https://example.com/redirect-two",
+        observed: true,
+        errors: "Unexpected token at position 20",
+        error: "Response exceeded the 200 byte limit.",
+        reasons: "A different analysis limit reached.",
+        observedMs: "10 | 20",
+        distinctValues: "2 | 3",
+      }),
+    ).toEqual(baseline);
+    expect(fingerprints({ property: "twitter:image" })).not.toEqual(baseline);
+    expect(fingerprints({ audience: "robots" })).not.toEqual(
+      fingerprints({ audience: "googlebot" }),
+    );
   });
 
   it("maps stability information and warnings to SARIF notes and warnings with evidence", () => {

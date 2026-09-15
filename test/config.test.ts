@@ -164,4 +164,59 @@ timeoutMs: 5000
 
     await expect(loadConfig({ cwd })).rejects.toThrow("Target id shared is duplicated");
   });
+
+  it("rejects a configuration that declares one URL with two contracts", async () => {
+    const cwd = await temporaryDirectory();
+    await writeFile(
+      join(cwd, "ssrwire.config.yml"),
+      `targets:
+  - id: home
+    url: https://example.com/
+  - id: landing
+    url: https://example.com/
+    require:
+      description: false
+`,
+    );
+
+    await expect(loadConfig({ cwd })).rejects.toThrow(
+      "https://example.com/ is declared more than once",
+    );
+  });
+
+  it("collapses identical repeated config targets and command-line duplicates", async () => {
+    const cwd = await temporaryDirectory();
+    await writeFile(
+      join(cwd, "ssrwire.config.yml"),
+      `targets:
+  - url: https://example.com/
+  - url: https://example.com/
+`,
+    );
+
+    const config = await loadConfig({
+      cwd,
+      urls: ["https://example.com/", "https://example.com/other"],
+    });
+
+    expect(config.targets.map((target) => target.url)).toEqual([
+      "https://example.com/",
+      "https://example.com/other",
+    ]);
+  });
+
+  it("compares accepted statuses as a set when checking duplicate contracts", async () => {
+    const cwd = await temporaryDirectory();
+    await writeFile(
+      join(cwd, "ssrwire.config.json"),
+      JSON.stringify({
+        targets: [
+          { url: "https://example.com/", expectedStatus: [200, 201] },
+          { url: "https://example.com/", expectedStatus: [201, 200, 201] },
+        ],
+      }),
+    );
+
+    expect((await loadConfig({ cwd })).targets).toHaveLength(1);
+  });
 });

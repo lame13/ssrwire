@@ -3,13 +3,13 @@ FROM node:26-bookworm-slim AS build
 WORKDIR /build
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 
 COPY tsconfig.json tsconfig.build.json ./
 COPY scripts/clean.mjs ./scripts/clean.mjs
 COPY src ./src
 RUN npm run build \
-  && npm prune --omit=dev \
+  && npm prune --omit=dev --no-audit --no-fund \
   && npm cache clean --force
 
 FROM node:26-bookworm-slim AS runtime

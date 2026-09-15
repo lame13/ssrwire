@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { MIMEType } from "node:util";
 
 import { createRedactionPlan, type RedactionPlan, redactText } from "./redact.js";
 import { createStreamInspector } from "./stream-parser.js";
@@ -158,6 +159,16 @@ function isHtmlContentType(value: string | null): boolean {
   if (value === null || value.trim().length === 0) return false;
   const mediaType = value.split(";", 1)[0]?.trim().toLowerCase();
   return mediaType === "text/html" || mediaType === "application/xhtml+xml";
+}
+
+/** Read the declared charset parameter, tolerating quoted values and stray whitespace. */
+function contentTypeCharset(value: string | null): string | undefined {
+  if (value === null) return undefined;
+  try {
+    return new MIMEType(value).params.get("charset")?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function createRequestHeaders(
@@ -395,7 +406,8 @@ export async function probeUrl(options: ProbeOptions): Promise<ProbeResult> {
               : `Expected an HTML response but received Content-Type ${redactText(mediaType, redaction).slice(0, 160)}.`,
         });
       }
-      const inspector = createStreamInspector();
+      const charset = contentTypeCharset(contentType);
+      const inspector = createStreamInspector(charset === undefined ? {} : { charset });
       const hash = createHash("sha256");
       let bytesRead = 0;
       let firstByteMs: number | undefined;
@@ -452,7 +464,9 @@ export async function probeUrl(options: ProbeOptions): Promise<ProbeResult> {
         headers: lastHeaders,
         timings,
         bytesRead,
-        bodySha256: hash.digest("hex"),
+        // A truncated or aborted body would otherwise publish a prefix fingerprint that looks
+        // exactly like a complete one to report consumers.
+        ...(completion === "complete" ? { bodySha256: hash.digest("hex") } : {}),
         signals,
         completion,
         status: response.status,
