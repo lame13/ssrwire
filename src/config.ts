@@ -262,15 +262,59 @@ async function readConfig(path: string | undefined): Promise<FileConfig> {
   return parsed.data;
 }
 
-function uniqueTargets(targets: readonly AuditTarget[]): readonly AuditTarget[] {
-  const seen = new Set<string>();
-  const unique = targets.filter((target) => {
-    if (seen.has(target.url)) {
-      return false;
+function stableSignature(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item as Readonly<Record<string, unknown>>).sort(([left], [right]) =>
+            left.localeCompare(right),
+          ),
+        )
+      : item,
+  );
+}
+
+function sameTargetContract(left: AuditTarget, right: AuditTarget): boolean {
+  const signature = (target: AuditTarget) =>
+    stableSignature({
+      id: target.id ?? null,
+      expectations: {
+        ...target.expectations,
+        statuses: [...target.expectations.statuses].sort((a, b) => a - b),
+      },
+    });
+  return signature(left) === signature(right);
+}
+
+/**
+ * Drop repeated URLs. A configuration that declares the same URL twice with different contracts
+ * or ids is ambiguous, so it is rejected instead of silently keeping the first entry.
+ */
+function dedupeTargets(
+  targets: readonly AuditTarget[],
+  options: { readonly rejectConflicts: boolean },
+): readonly AuditTarget[] {
+  const unique: AuditTarget[] = [];
+  const byUrl = new Map<string, AuditTarget>();
+  for (const target of targets) {
+    const existing = byUrl.get(target.url);
+    if (existing === undefined) {
+      byUrl.set(target.url, target);
+      unique.push(target);
+      continue;
     }
-    seen.add(target.url);
-    return true;
-  });
+    if (options.rejectConflicts && !sameTargetContract(existing, target)) {
+      throw new ConfigError(
+        `${target.url} is declared more than once with different expectations or target ids. ` +
+          "Keep a single contract per URL, or change one URL.",
+      );
+    }
+  }
+  return unique;
+}
+
+function uniqueTargets(targets: readonly AuditTarget[]): readonly AuditTarget[] {
+  const unique = dedupeTargets(targets, { rejectConflicts: false });
   const ids = new Set<string>();
   for (const target of unique) {
     if (target.id === undefined) continue;
@@ -286,8 +330,12 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
   const cwd = options.cwd ?? process.cwd();
   const configPath = await resolveConfigPath(options.configPath, cwd);
   const file = await readConfig(configPath);
-  const fileTargets = (file.targets ?? []).map(normalizeTarget);
-  const cliTargets = (options.urls ?? []).map(normalizeTarget);
+  const fileTargets = dedupeTargets((file.targets ?? []).map(normalizeTarget), {
+    rejectConflicts: true,
+  });
+  const cliTargets = dedupeTargets((options.urls ?? []).map(normalizeTarget), {
+    rejectConflicts: false,
+  });
   const targets = uniqueTargets([...fileTargets, ...cliTargets]);
   if (targets.length === 0) {
     throw new ConfigError(

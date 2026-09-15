@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   effectiveTwitterCardSignal,
   firstSocialSignal,
@@ -94,7 +96,9 @@ function probeRow(probe: ProbeResult, showSample: boolean): readonly string[] {
 
 function formatSignalSet(signals: readonly (ElementSignal | undefined)[]): string {
   const present = signals.filter((signal): signal is ElementSignal => signal !== undefined);
-  if (present.length < signals.length) return `${present.length}/${signals.length}`;
+  if (signals.length === 0 || present.length < signals.length) {
+    return `${present.length}/${signals.length}`;
+  }
   const arrivalMs = Math.max(...present.map((signal) => signal.atMs));
   const location = present.some((signal) => signal.location === "body")
     ? "body"
@@ -289,6 +293,25 @@ function artifactUri(url: string): string {
   }
 }
 
+const SARIF_HELP_URI = "https://github.com/lame13/ssrwire/blob/main/README.md#what-it-observes";
+
+// Evidence carries volatile observations such as counts and observed values. A fingerprint that
+// included them would mint a new Code Scanning alert on every run, and one that ignored the
+// finding's stable discriminators would merge distinct findings that share a code, URL, and agent.
+const STABLE_EVIDENCE_KEYS = new Set(["audience", "completion", "fields", "property"]);
+
+function findingFingerprint(finding: Finding): string {
+  const discriminators = Object.entries(finding.evidence ?? {})
+    .filter(([key]) => STABLE_EVIDENCE_KEYS.has(key))
+    .sort(([left], [right]) => left.localeCompare(right));
+  return createHash("sha256")
+    .update(
+      JSON.stringify([finding.code, finding.url, finding.agent ?? "", discriminators]),
+      "utf8",
+    )
+    .digest("hex");
+}
+
 export function renderSarif(audit: AuditResult): string {
   const findings = audit.results.flatMap((result) => result.findings);
   const codes = [...new Set(findings.map((finding) => finding.code))].sort();
@@ -305,6 +328,7 @@ export function renderSarif(audit: AuditResult): string {
       id: code,
       name: code,
       shortDescription: { text: ruleDescription(code) },
+      helpUri: SARIF_HELP_URI,
       defaultConfiguration: { level: sarifLevel(defaultSeverity) },
     };
   });
@@ -313,6 +337,7 @@ export function renderSarif(audit: AuditResult): string {
     ruleId: finding.code,
     level: sarifLevel(finding.severity),
     message: { text: finding.message },
+    partialFingerprints: { "ssrwireFinding/v1": findingFingerprint(finding) },
     locations: [
       {
         physicalLocation: {

@@ -22,6 +22,12 @@ const JSON_LD_CAPTURE_LIMIT = 1_048_576;
 const JSON_LD_NODE_LIMIT = 10_000;
 const JSON_LD_TYPE_LIMIT = 256;
 
+/**
+ * Bytes inspected while waiting for an in-document encoding declaration. A response charset only
+ * needs the first three bytes checked for a BOM before decoding can begin.
+ */
+const CHARSET_SNIFF_LIMIT = 1_024;
+
 interface TextCapture {
   readonly location: ElementLocation;
   value: string;
@@ -32,6 +38,16 @@ interface ScriptCapture extends TextCapture {
   bytes: number;
   truncated: boolean;
   omitted: boolean;
+}
+
+interface PendingChunk {
+  readonly chunk: Uint8Array;
+  readonly atMs: number;
+}
+
+export interface StreamInspectorOptions {
+  /** Encoding label declared by the response, applied before any in-document declaration. */
+  readonly charset?: string;
 }
 
 export interface StreamInspector {
@@ -54,6 +70,79 @@ function timing(atMs: number, observedByByte: number): TimingMark {
 
 function isRobotsAudience(value: string | undefined): value is RobotsAudience {
   return value === "robots" || value === "googlebot" || value === "bingbot";
+}
+
+function bomCharset(bytes: Uint8Array): string | undefined {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
+  return undefined;
+}
+
+/** Normalize a declared label and confirm that the runtime can actually decode it. */
+function supportedCharset(label: string | undefined): string | undefined {
+  const trimmed =
+    label
+      ?.trim()
+      .replace(/^["']|["']$/gu, "")
+      .toLowerCase() ?? "";
+  if (trimmed.length === 0) return undefined;
+  try {
+    return new TextDecoder(trimmed).encoding;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Best-effort ASCII scan for a declaration carried by the document itself. Encoding labels are
+ * ASCII, so replacing high bytes keeps the scan a single byte wide.
+ */
+function declaredCharset(bytes: Uint8Array): string | undefined {
+  let ascii = "";
+  for (const byte of bytes) {
+    ascii += byte < 0x80 ? String.fromCharCode(byte) : " ";
+  }
+  let charset: string | undefined;
+  const parser = new Parser(
+    {
+      onopentag(name, attributes) {
+        if (name !== "meta" || charset !== undefined) return;
+        const { charset: declared, content, "http-equiv": pragma } = attributes;
+        let label = declared;
+        if (label === undefined && pragma?.toLowerCase() === "content-type") {
+          const match = /(?:^|;)\s*charset\s*=\s*(?:"([^"]*)"|'([^']*)'|([^;\s]*))/iu.exec(
+            content ?? "",
+          );
+          label = match?.[1] ?? match?.[2] ?? match?.[3];
+        }
+        charset = supportedCharset(label);
+        // An ASCII meta declaration cannot itself announce a UTF-16 byte stream.
+        if (charset === "utf-16le" || charset === "utf-16be") charset = "utf-8";
+      },
+    },
+    { decodeEntities: false },
+  );
+  // Only complete tags qualify. Comments, script text and unrelated attributes are ignored.
+  parser.write(ascii);
+  return charset;
+}
+
+function bufferedPrefix(pending: readonly PendingChunk[]): Uint8Array {
+  let total = 0;
+  for (const item of pending) {
+    total = Math.min(CHARSET_SNIFF_LIMIT, total + item.chunk.byteLength);
+  }
+
+  const prefix = new Uint8Array(total);
+  let offset = 0;
+  for (const item of pending) {
+    if (offset >= total) break;
+    const slice = item.chunk.subarray(0, total - offset);
+    prefix.set(slice, offset);
+    offset += slice.byteLength;
+  }
+  return prefix;
 }
 
 function collectJsonLdTypes(value: unknown, output: Set<string>): void {
@@ -92,7 +181,8 @@ function collectJsonLdTypes(value: unknown, output: Set<string>): void {
 }
 
 class HtmlStreamInspector implements StreamInspector {
-  readonly #decoder = new TextDecoder();
+  readonly #charset: string | undefined;
+  #decoder: TextDecoder | undefined;
   readonly #parser: Parser;
   readonly #descriptions: ElementSignal[] = [];
   readonly #canonicals: ElementSignal[] = [];
@@ -102,6 +192,8 @@ class HtmlStreamInspector implements StreamInspector {
   readonly #h1s: ElementSignal[] = [];
   readonly #jsonLd: JsonLdSignal[] = [];
   readonly #titles: ElementSignal[] = [];
+  #pending: PendingChunk[] = [];
+  #pendingBytes = 0;
 
   #bytesObserved = 0;
   #currentAtMs = 0;
@@ -124,7 +216,8 @@ class HtmlStreamInspector implements StreamInspector {
   #bodyStarted?: TimingMark;
   #documentClosed?: TimingMark;
 
-  constructor() {
+  constructor(charset?: string) {
+    this.#charset = supportedCharset(charset);
     this.#parser = new Parser(
       {
         onopentag: (name, attributes) => this.#onOpenTag(name, attributes),
@@ -141,24 +234,40 @@ class HtmlStreamInspector implements StreamInspector {
   }
 
   get bytesObserved(): number {
-    return this.#bytesObserved;
+    return this.#bytesObserved + this.#pendingBytes;
   }
 
   write(chunk: Uint8Array, atMs: number): void {
     if (this.#ended) throw new Error("Cannot write to a finished stream inspector.");
     if (chunk.byteLength === 0) return;
 
-    this.#bytesObserved += chunk.byteLength;
-    this.#currentAtMs = Number.isFinite(atMs) ? Math.max(0, atMs) : 0;
-    const decoded = this.#decoder.decode(chunk, { stream: true });
-    if (decoded.length > 0) this.#parser.write(decoded);
+    const at = Number.isFinite(atMs) ? Math.max(0, atMs) : 0;
+    this.#currentAtMs = at;
+    if (this.#decoder !== undefined) {
+      this.#consume(chunk, at);
+      return;
+    }
+
+    // Hold the first bytes until the encoding is known so that a legacy-encoded document is not
+    // permanently decoded as replacement characters. Buffered chunks are replayed with their
+    // original arrival times, so signal timing and observed byte positions stay unchanged.
+    // Small chunks may outlive this call; callers can safely reuse their input buffers.
+    // A chunk at least as large as the sniff window is always consumed before write returns.
+    this.#pending.push({
+      chunk: chunk.byteLength < CHARSET_SNIFF_LIMIT ? Uint8Array.from(chunk) : chunk,
+      atMs: at,
+    });
+    this.#pendingBytes += chunk.byteLength;
+    this.#resolveDecoder(false);
   }
 
   end(atMs = this.#currentAtMs): DocumentSignals {
     if (this.#result !== undefined) return this.#result;
 
-    this.#currentAtMs = Number.isFinite(atMs) ? Math.max(0, atMs) : this.#currentAtMs;
-    const tail = this.#decoder.decode();
+    const at = Number.isFinite(atMs) ? Math.max(0, atMs) : this.#currentAtMs;
+    this.#resolveDecoder(true);
+    this.#currentAtMs = at;
+    const tail = this.#decoder?.decode() ?? "";
     this.#parser.end(tail.length > 0 ? tail : undefined);
     this.#ended = true;
 
@@ -189,6 +298,32 @@ class HtmlStreamInspector implements StreamInspector {
 
   finish(atMs = this.#currentAtMs): DocumentSignals {
     return this.end(atMs);
+  }
+
+  #consume(chunk: Uint8Array, atMs: number): void {
+    this.#bytesObserved += chunk.byteLength;
+    this.#currentAtMs = atMs;
+    const decoded = this.#decoder?.decode(chunk, { stream: true }) ?? "";
+    if (decoded.length > 0) this.#parser.write(decoded);
+  }
+
+  #resolveDecoder(force: boolean): void {
+    if (this.#decoder !== undefined) return;
+    if (!force && this.#pendingBytes < 3) return;
+    const charset = this.#pendingCharset();
+    if (charset === undefined && !force && this.#pendingBytes < CHARSET_SNIFF_LIMIT) return;
+
+    this.#decoder = new TextDecoder(charset ?? "utf-8");
+    const pending = this.#pending;
+    this.#pending = [];
+    this.#pendingBytes = 0;
+    for (const item of pending) this.#consume(item.chunk, item.atMs);
+  }
+
+  #pendingCharset(): string | undefined {
+    if (this.#pending.length === 0) return undefined;
+    const prefix = bufferedPrefix(this.#pending);
+    return bomCharset(prefix) ?? this.#charset ?? declaredCharset(prefix);
   }
 
   #mark(): TimingMark {
@@ -449,6 +584,6 @@ class HtmlStreamInspector implements StreamInspector {
   }
 }
 
-export function createStreamInspector(): StreamInspector {
-  return new HtmlStreamInspector();
+export function createStreamInspector(options: StreamInspectorOptions = {}): StreamInspector {
+  return new HtmlStreamInspector(options.charset);
 }
