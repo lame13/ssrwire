@@ -5,6 +5,26 @@ All notable changes to SSRWire are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-15
+
+### Fixed
+
+- Decode HTML using a leading byte-order mark, a supported response charset,
+  or an in-document encoding declaration within the first 1024 bytes, with
+  UTF-8 as the fallback. Ignore charset-like text in comments and unrelated
+  attributes, and preserve arrival timestamps and byte evidence while buffering.
+- Preserve buffered HTML when callers reuse input buffers, and use the last
+  arrival time when `end()` or `finish()` closes an unfinished element.
+- Emit body fingerprints only for complete responses, excluding truncated,
+  timed-out, and failed response bodies.
+- Reject conflicting duplicate URLs in configuration while allowing equivalent
+  contracts, reordered accepted statuses, and command-line duplicates.
+- Give SARIF findings stable, distinct identities without incorporating changing
+  observations, counts, or error messages, and add rule help links.
+- Handle empty terminal signal sets without displaying negative-infinite timing.
+- Correct release instructions, version-reference guidance, and the documented
+  audit comparison compatibility version.
+
 ## [0.4.1] - 2026-09-04
 
 ### Changed
@@ -92,7 +112,8 @@ All notable changes to SSRWire are documented here. The project follows
 - Terminal, JSON, and SARIF reports with CI-safe exit codes.
 - YAML configuration, one-off URL checks, Docker support, and GitHub Actions examples.
 
-[Unreleased]: https://github.com/lame13/ssrwire/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/lame13/ssrwire/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/lame13/ssrwire/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/lame13/ssrwire/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/lame13/ssrwire/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lame13/ssrwire/compare/v0.2.0...v0.3.0
