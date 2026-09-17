@@ -55,6 +55,11 @@ describe("agent profiles", () => {
       "bingbot",
       "twitterbot",
       "facebook",
+      "gptbot",
+      "oai-searchbot",
+      "chatgpt-user",
+      "claudebot",
+      "perplexitybot",
     ]);
     expect(resolveAgent("chrome").key).toBe("browser");
     expect(resolveAgent("bingbot").requiresHeadMetadata).toBe(true);
@@ -142,6 +147,22 @@ describe("probeUrl", () => {
         .update(first + second)
         .digest("hex"),
     );
+  });
+
+  it("captures X-Robots-Tag in the allowlisted response-header snapshot", async () => {
+    const { origin } = await listen((_request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "x-robots-tag": "googlebot: noindex, nofollow",
+      });
+      response.end(
+        "<html><head><title>Header fixture</title></head><body><main>Text</main></body></html>",
+      );
+    });
+
+    const result = await probeUrl(baseOptions(`${origin}/page`));
+
+    expect(result.headers.values["x-robots-tag"]).toBe("googlebot: noindex, nofollow");
   });
 
   it("permanently strips all custom headers after a cross-origin redirect", async () => {

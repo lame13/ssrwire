@@ -96,7 +96,7 @@ const targetResult: TargetAuditResult = {
 
 const audit: AuditResult = {
   schemaVersion: 1,
-  version: "0.4.2",
+  version: "0.5.0",
   generatedAt: "2026-08-22T00:00:00.000Z",
   durationMs: 123,
   results: [targetResult],
@@ -107,7 +107,7 @@ describe("renderTerminal", () => {
   it("renders a readable, colorless timing table and finding details", () => {
     const output = renderTerminal(audit, { color: false });
 
-    expect(output).toContain("SSRWire 0.4.2");
+    expect(output).toContain("SSRWire 0.5.0");
     expect(output).toContain("Agent");
     expect(output).toContain("First byte");
     expect(output).toContain("25 ms/head");
@@ -145,6 +145,27 @@ describe("renderTerminal", () => {
 
   it("adds ANSI styling only when requested", () => {
     expect(renderTerminal(audit, { color: true })).toContain("\u001b[");
+  });
+
+  it("adds a plain-language verdict and the fix worth acting on", () => {
+    const output = renderTerminal(audit, { color: false });
+
+    expect(output).toContain("The page works, with room to improve");
+    expect(output).toContain("What to do");
+    expect(output).toContain("No meta description");
+    expect(output).toContain("meta description in the server-rendered HTML");
+  });
+
+  it("omits the fix section when a target has no findings", () => {
+    const cleanAudit: AuditResult = {
+      ...audit,
+      results: [{ ...targetResult, findings: [] }],
+      summary: { targets: 1, probes: 1, errors: 0, warnings: 0, info: 0, incomplete: 0 },
+    };
+    const output = renderTerminal(cleanAudit, { color: false });
+
+    expect(output).toContain("Every checked crawler received the expected HTML");
+    expect(output).not.toContain("What to do");
   });
 
   it("shows body readiness when any required social signal arrived in the body", () => {
@@ -267,6 +288,14 @@ describe("structured reporters", () => {
       "https://example.com/page",
     );
     expect(output.endsWith("\n")).toBe(true);
+  });
+
+  it("renders the readable HTML report through the shared report dispatcher", () => {
+    const output = renderReport(audit, "html", { color: false });
+
+    expect(output.startsWith("<!doctype html>")).toBe(true);
+    expect(output).toContain("No meta description");
+    expect(output).toContain("Content-Security-Policy");
   });
 
   it("fingerprints SARIF findings so Code Scanning keeps alerts stable and distinct", () => {

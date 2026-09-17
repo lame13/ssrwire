@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const node = process.execPath;
 const npmCli = process.env.npm_execpath;
-const expectedVersion = "0.4.2";
+const expectedVersion = "0.5.0";
 
 if (!npmCli) {
   throw new Error("npm_execpath is unavailable. Run this check with npm run package:check.");
@@ -59,6 +59,12 @@ try {
     "dist/compare.d.ts",
     "dist/comparison-reporters.js",
     "dist/comparison-reporters.d.ts",
+    "dist/explain.js",
+    "dist/explain.d.ts",
+    "dist/framework.js",
+    "dist/framework.d.ts",
+    "dist/html-report.js",
+    "dist/html-report.d.ts",
     "dist/index.js",
     "dist/index.d.ts",
     "dist/social.js",
@@ -66,6 +72,9 @@ try {
     "dist/stability.js",
     "dist/stability.d.ts",
     "src/index.ts",
+    "src/explain.ts",
+    "src/framework.ts",
+    "src/html-report.ts",
     "src/stability.ts",
     "README.md",
     "LICENSE",
@@ -103,8 +112,12 @@ try {
     throw new Error("Installed CLI did not render its help output.");
   }
   const checkHelp = runNpm(["exec", "--", "ssrwire", "check", "--help"], installDirectory);
-  if (!checkHelp.includes("--repeat <count>")) {
-    throw new Error("Installed CLI did not expose repeat sampling.");
+  if (
+    !checkHelp.includes("--repeat <count>") ||
+    !checkHelp.includes("terminal, json, sarif, or html") ||
+    !checkHelp.includes("--framework <name>")
+  ) {
+    throw new Error("Installed CLI did not expose repeat sampling or readable reports.");
   }
   const compareHelp = runNpm(["exec", "--", "ssrwire", "compare", "--help"], installDirectory);
   if (
@@ -132,8 +145,9 @@ try {
   );
 
   const importScript = [
-    'import { VERSION, compareAudits, runAudit } from "ssrwire";',
+    'import { VERSION, compareAudits, explainFinding, renderAuditHtml, runAudit } from "ssrwire";',
     'if (!VERSION || typeof runAudit !== "function" || typeof compareAudits !== "function") process.exit(1);',
+    'if (typeof renderAuditHtml !== "function" || typeof explainFinding !== "function") process.exit(1);',
   ].join("\n");
   const importPath = join(installDirectory, "import-smoke.mjs");
   await writeFile(importPath, `${importScript}\n`);

@@ -223,7 +223,7 @@ export interface AuditResult {
   readonly summary: AuditSummary;
 }
 
-export type ReportFormat = "terminal" | "json" | "sarif";
+export type ReportFormat = "terminal" | "json" | "sarif" | "html";
 
 export type ComparisonKind = "regression" | "fixed" | "changed";
 

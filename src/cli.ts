@@ -6,6 +6,14 @@ import { AuditReportError, parseAuditReportText } from "./audit-report.js";
 import { compareAudits } from "./compare.js";
 import { renderComparisonReport } from "./comparison-reporters.js";
 import { ConfigError, loadConfig } from "./config.js";
+import {
+  detectFrameworkFromProbes,
+  detectProjectFramework,
+  FRAMEWORK_KEYS,
+  type FrameworkDetection,
+  frameworkLabel,
+  isFrameworkKey,
+} from "./framework.js";
 import { renderReport } from "./reporters.js";
 import type { AuditResult, ComparisonReportFormat, ReportFormat } from "./types.js";
 import { VERSION } from "./version.js";
@@ -21,6 +29,7 @@ interface CliOptions {
   readonly format: ReportFormat;
   readonly output?: string;
   readonly failOn: "error" | "warning" | "never";
+  readonly framework?: string;
   readonly color: boolean;
 }
 
@@ -76,10 +85,18 @@ function parseInteger(value: string): number {
 }
 
 function parseFormat(value: string): ReportFormat {
-  if (value === "terminal" || value === "json" || value === "sarif") {
+  if (value === "terminal" || value === "json" || value === "sarif" || value === "html") {
     return value;
   }
-  throw new InvalidArgumentError("Expected terminal, json, or sarif.");
+  throw new InvalidArgumentError("Expected terminal, json, sarif, or html.");
+}
+
+function parseFrameworkOption(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "auto" || normalized === "none" || isFrameworkKey(normalized)) {
+    return normalized;
+  }
+  throw new InvalidArgumentError(`Expected auto, none, or one of ${FRAMEWORK_KEYS.join(", ")}.`);
 }
 
 function parseFailOn(value: string): CliOptions["failOn"] {
@@ -116,9 +133,15 @@ function addCheckOptions(command: Command): Command {
     .option("--max-bytes <bytes>", "maximum response bytes", parseInteger)
     .option("--max-redirects <count>", "maximum redirects", parseInteger)
     .option("--repeat <count>", "sequential samples per URL and agent", parseInteger)
-    .option("-f, --format <format>", "terminal, json, or sarif", parseFormat, "terminal")
+    .option("-f, --format <format>", "terminal, json, sarif, or html", parseFormat, "terminal")
     .option("-o, --output <path>", "write the report to a file")
     .option("--fail-on <level>", "error, warning, or never", parseFailOn, "error")
+    .option(
+      "--framework <name>",
+      "fix recipes for auto, none, or a framework name",
+      parseFrameworkOption,
+      "auto",
+    )
     .option("--no-color", "disable terminal colors");
 }
 
@@ -161,6 +184,34 @@ async function readAuditFile(path: string, label: string): Promise<AuditResult> 
   return parseAuditReportText(text, `${label} audit report`);
 }
 
+/**
+ * Decide which stack the fix recipes should describe.
+ *
+ * Response headers describe the thing that actually answered, so they win over the local
+ * manifest. The manifest is the fallback for a local build, and `--framework` lets anyone
+ * override both when the report is being prepared for a project SSRWire cannot see.
+ */
+async function resolveFramework(
+  option: string | undefined,
+  audit: AuditResult,
+): Promise<FrameworkDetection | undefined> {
+  if (option === "none") {
+    return undefined;
+  }
+  if (option !== undefined && option !== "auto") {
+    if (!isFrameworkKey(option)) {
+      throw new ConfigError(`Unsupported framework: ${option}.`);
+    }
+    return { key: option, label: frameworkLabel(option), evidence: "requested with --framework" };
+  }
+
+  for (const result of audit.results) {
+    const detected = detectFrameworkFromProbes(result.probes);
+    if (detected !== undefined) return detected;
+  }
+  return detectProjectFramework(process.cwd());
+}
+
 async function check(urls: readonly string[], options: CliOptions): Promise<void> {
   const config = await loadConfig({
     ...(options.config ? { configPath: options.config } : {}),
@@ -173,12 +224,19 @@ async function check(urls: readonly string[], options: CliOptions): Promise<void
     ...(options.repeat === undefined ? {} : { repeat: options.repeat }),
   });
   const audit = await runAudit(config);
+  const framework =
+    options.format === "html" ? await resolveFramework(options.framework, audit) : undefined;
   const color =
     options.color &&
     !options.output &&
     Boolean(process.stdout.isTTY) &&
     !Reflect.has(process.env, "NO_COLOR");
-  const report = renderReport(audit, options.format, { color });
+  const exitCode = reportExitCode(audit.summary, options.failOn);
+  const report = renderReport(audit, options.format, {
+    color,
+    ...(framework === undefined ? {} : { framework }),
+    policy: { failOn: options.failOn, exitCode },
+  });
 
   if (options.output) {
     await writeReport(options.output, report);
@@ -187,7 +245,7 @@ async function check(urls: readonly string[], options: CliOptions): Promise<void
     process.stdout.write(report);
   }
 
-  process.exitCode = reportExitCode(audit.summary, options.failOn);
+  process.exitCode = exitCode;
 }
 
 async function compareReports(

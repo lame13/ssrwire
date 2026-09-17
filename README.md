@@ -17,6 +17,10 @@ executing JavaScript.
 npx ssrwire https://example.com/product
 ```
 
+Add `--format html` when the result has to be read by someone who does not live in a terminal: the
+report states a verdict, explains each finding in plain language, and suggests a fix for the stack
+that answered.
+
 ## Why this exists
 
 Modern SSR output is not always one complete HTML document delivered at once:
@@ -69,6 +73,7 @@ Then run all configured targets:
 npx ssrwire check
 npx ssrwire check --format json --output reports/ssrwire.json
 npx ssrwire check --format sarif --output reports/ssrwire.sarif
+npx ssrwire check --format html --output reports/ssrwire.html
 ```
 
 One-off checks need no config:
@@ -144,11 +149,46 @@ one report, so an ID mismatch is shown as one removed and one added target
 instead of being guessed. Comparison requires the explicit `schemaVersion: 1`
 audit contract emitted by SSRWire 0.4.0 and later.
 
+## Readable reports
+
+`check --format html` writes one self-contained, script-free file that anyone can open, email, or
+attach to an issue — no terminal, no build step, and no remote assets:
+
+```bash
+npx ssrwire check --format html --output ssrwire.html
+```
+
+The report leads with a one-sentence verdict per target. Each finding then reads as what SSRWire
+observed, why it matters, and what to do, followed by probe timings, streaming arrival order,
+social-preview readiness, and a card showing how a shared link would be described.
+
+Fix recipes adapt to the stack that answered. SSRWire reads `x-powered-by` and `x-nextjs-cache`
+from the response, falls back to the `package.json` or `composer.json` of the working directory,
+and accepts an explicit choice:
+
+```bash
+npx ssrwire check --format html --framework nuxt --output ssrwire.html
+npx ssrwire check --format html --framework none --output ssrwire.html
+```
+
+`--framework` accepts `auto` (the default), `none`, or one of `nextjs`, `nuxt`, `astro`,
+`sveltekit`, `remix`, `laravel`, `wordpress`, and `php`. Detection never changes which findings a
+run produces; it only selects the example snippet that accompanies a fix, and an unrecognized
+stack simply leaves the recipe stack-neutral.
+
+The preview card prints the Open Graph and Twitter Card values captured from the response and shows
+the image URL as text. SSRWire does not fetch or render the image, so the report stays a single
+offline file with no requests of its own.
+
+Terminal output gains the same plain-language reading: a verdict line for every target and a short
+"What to do" list of distinct fixes ordered by severity.
+
 ## What it observes
 
 For each target, agent, and configured sample, SSRWire captures:
 
-- response status, final URL, redirect chain, and an allowlisted response-header snapshot;
+- response status, final URL, redirect chain, and an allowlisted response-header snapshot that
+  includes `X-Robots-Tag`, cache, and framework headers;
 - time to response headers, first response-body bytes, and completed body;
 - total bytes delivered to the stream parser and a body fingerprint;
 - title, meta description, canonical, meta robots, Open Graph, Twitter Card,
@@ -172,6 +212,9 @@ It then checks:
 | Invalid JSON-LD | Warning |
 | JSON-LD block/count exceeds the bounded analysis budget | Warning |
 | Critical or enabled social metadata in `<body>` for a profile that requires head metadata | Error |
+| `X-Robots-Tag` that removes the page from search results for a profile | Error |
+| `X-Robots-Tag` that restricts a profile while keeping the page indexed | Warning |
+| Permissive `X-Robots-Tag` that a meta robots tag overrides | Information |
 | Status, final URL, title, canonical, robots, or enabled social metadata drift between profiles | Warning |
 | Completion, status, final URL, or redirect-chain drift between samples | Warning |
 | Metadata value or document-location drift between complete samples | Warning |
@@ -195,12 +238,29 @@ The default run uses:
 | `bingbot` | Bingbot user agent | Yes |
 | `twitterbot` | X/Twitter link-preview user agent | Yes |
 
-`facebook` is also built in and can be selected explicitly. A repeated CLI
-`--agent` list replaces the configured/default list for that run:
+`facebook` and the AI crawlers below are also built in. A repeated CLI `--agent`
+list replaces the configured/default list for that run:
 
 ```bash
 npx ssrwire https://example.com/ --agent googlebot --agent facebook
+npx ssrwire https://example.com/ --agent browser --agent gptbot --agent claudebot
 ```
+
+AI and answer-engine crawlers can be selected by key or alias:
+
+| Key | Alias examples | Intended view | Requires metadata in `<head>` |
+|---|---|---:|---:|
+| `gptbot` | `gpt`, `openai` | OpenAI GPTBot training crawler | No |
+| `oai-searchbot` | `searchbot` | OpenAI search index crawler | No |
+| `chatgpt-user` | `chatgpt` | ChatGPT on-demand fetch for a user request | No |
+| `claudebot` | `claude`, `anthropic` | Anthropic ClaudeBot | No |
+| `perplexitybot` | `perplexity` | PerplexityBot | No |
+
+These profiles read the whole document without executing JavaScript, so their
+default policy does not require head-only delivery. Each user-agent string
+carries the published product token — the part user-agent branching on a target
+actually matches — while the surrounding browser tokens and version numbers
+change over time.
 
 These profiles send user-agent strings; they do not prove how a real crawler
 will fetch, render, index, or cache a page. SSRWire does not perform crawler IP
@@ -450,9 +510,10 @@ Check options:
 | `--max-bytes <bytes>` | Override response-body limit |
 | `--max-redirects <count>` | Override redirect limit |
 | `--repeat <count>` | Run 1–10 sequential samples per URL and agent |
-| `-f, --format <format>` | `terminal`, `json`, or `sarif` |
+| `-f, --format <format>` | `terminal`, `json`, `sarif`, or `html` |
 | `-o, --output <path>` | Write the report to a file |
 | `--fail-on <level>` | `error`, `warning`, or `never` |
+| `--framework <name>` | Fix recipes for `auto`, `none`, or a framework name |
 | `--no-color` | Disable terminal color |
 
 Config-file targets and CLI URLs are combined, with exact duplicate URLs
@@ -477,6 +538,9 @@ Comparison options:
   signal plus repeated-run stability summaries.
 - `sarif`: findings suitable for GitHub Code Scanning and other SARIF 2.1.0
   consumers.
+- `html`: a self-contained, script-free audit report with a verdict, plain-language
+  findings, framework-specific fix recipes, timing evidence, and a social preview card, suitable
+  for sharing outside the terminal.
 - comparison `html`: a script-free deployment summary and per-agent wire
   waterfall suitable for a CI artifact.
 
@@ -547,6 +611,33 @@ const config = await loadConfig({ urls: ["https://example.com/"], repeat: 3 });
 const audit = await runAudit(config);
 process.stdout.write(renderJson(audit));
 ```
+
+Readable output and fix recipes are exported too, so a caller can reuse the human layer without
+shelling out to the CLI:
+
+```ts
+import {
+  detectProjectFramework,
+  explainFinding,
+  nextSteps,
+  renderAuditHtml,
+} from "ssrwire";
+
+const framework = await detectProjectFramework(process.cwd());
+const context = framework === undefined ? {} : { framework };
+const html = renderAuditHtml(audit, {
+  ...context,
+  policy: { failOn: "error", exitCode: 0 },
+});
+const steps = nextSteps(audit.results[0]?.findings ?? [], context);
+const [finding] = audit.results[0]?.findings ?? [];
+const explanation = finding === undefined ? undefined : explainFinding(finding, context);
+```
+
+`explainFinding()` maps a finding code onto a title, impact, fix, and optional framework snippet.
+Unknown codes fall back to the recorded message, so a custom check never renders an empty
+explanation. Explanations are derived at render time and are not part of the persisted audit
+contract.
 
 Comparisons use the same primitives as the CLI:
 

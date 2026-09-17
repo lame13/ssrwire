@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 
+import { nextSteps, targetVerdict } from "./explain.js";
+import type { FrameworkDetection } from "./framework.js";
+import { type AuditPolicyOutcome, renderAuditHtml } from "./html-report.js";
 import {
   effectiveTwitterCardSignal,
   firstSocialSignal,
@@ -18,7 +21,13 @@ import type {
 
 export interface ReporterOptions {
   readonly color?: boolean;
+  /** Detected stack, used to select framework-specific fix recipes in readable output. */
+  readonly framework?: FrameworkDetection;
+  /** Policy outcome for this run, embedded in the HTML report. */
+  readonly policy?: AuditPolicyOutcome;
 }
+
+const TERMINAL_FIX_LIMIT = 5;
 
 const ANSI = {
   red: "\u001b[31m",
@@ -187,7 +196,9 @@ export function renderTerminal(audit: AuditResult, options: ReporterOptions = {}
 
   for (const result of audit.results) {
     const showSample = (audit.repeat ?? 1) > 1;
+    const verdict = targetVerdict(result);
     lines.push("", paint(terminalSafe(result.target.url), ANSI.bold, color));
+    lines.push(paint(terminalSafe(verdict.headline), ANSI.dim, color));
     lines.push(
       renderTable(
         [
@@ -239,6 +250,33 @@ export function renderTerminal(audit: AuditResult, options: ReporterOptions = {}
       lines.push("Findings: none");
     } else {
       lines.push("Findings:", ...result.findings.map((finding) => formatFinding(finding, color)));
+    }
+
+    const steps = nextSteps(
+      result.findings,
+      options.framework === undefined ? {} : { framework: options.framework },
+    );
+    if (steps.length > 0) {
+      lines.push("", paint("What to do", ANSI.bold, color));
+      for (const step of steps.slice(0, TERMINAL_FIX_LIMIT)) {
+        const label = paint(
+          step.severity.toUpperCase().padEnd(7),
+          severityColor(step.severity),
+          color,
+        );
+        const repeated = step.occurrences > 1 ? ` (${step.occurrences} findings)` : "";
+        lines.push(`  ${label} ${terminalSafe(step.title)}${repeated}`);
+        lines.push(`          ${truncate(step.fix, 160)}`);
+      }
+      if (steps.length > TERMINAL_FIX_LIMIT) {
+        lines.push(
+          paint(
+            `          ${steps.length - TERMINAL_FIX_LIMIT} further distinct fix(es); see the findings above`,
+            ANSI.dim,
+            color,
+          ),
+        );
+      }
     }
   }
 
@@ -387,6 +425,12 @@ export function renderReport(
   }
   if (format === "sarif") {
     return renderSarif(audit);
+  }
+  if (format === "html") {
+    return renderAuditHtml(audit, {
+      ...(options.framework === undefined ? {} : { framework: options.framework }),
+      ...(options.policy === undefined ? {} : { policy: options.policy }),
+    });
   }
 
   const exhaustive: never = format;

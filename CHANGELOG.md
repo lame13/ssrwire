@@ -5,6 +5,34 @@ All notable changes to SSRWire are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-17
+
+### Added
+
+- `check --format html` for one self-contained, script-free audit report with a per-target verdict,
+  plain-language findings, fix recipes, probe timings, streaming arrival order, social-preview
+  readiness, and a social preview card that prints the captured values and image URL without
+  fetching anything.
+- Human-readable findings through `explainFinding()`, `nextSteps()`, `targetVerdict()`, and
+  `auditVerdict()`: every built-in finding code now maps onto what was observed, why it matters,
+  and what to change, with a generic fallback for unrecognized codes.
+- Framework-aware fix recipes for Next.js, Nuxt, Astro, SvelteKit, Remix, Laravel, WordPress, and
+  plain PHP, selected from `x-powered-by` and `x-nextjs-cache` response headers, the working
+  directory's `package.json` or `composer.json`, or an explicit `--framework` override.
+- `X-Robots-Tag` response-header checks per crawler profile: `robots-header-noindex` (error),
+  `robots-header-restrictive` (warning), and `robots-header-ineffective` (information) with
+  `X-Robots-Tag` added to the allowlisted response-header snapshot.
+- Built-in AI and answer-engine crawler profiles: `gptbot`, `oai-searchbot`, `chatgpt-user`,
+  `claudebot`, and `perplexitybot`, with aliases such as `claude` and `perplexity`.
+- Terminal verdict lines per target and a "What to do" list of distinct fixes ordered by severity.
+
+### Changed
+
+- The HTML audit report is exposed through `renderReport()` and `renderAuditHtml()`, and embeds the
+  run's `--fail-on` policy and exit code when the CLI writes it.
+- Explanations, verdicts, and fix recipes are derived at render time, so the persisted
+  `schemaVersion: 1` audit contract and offline comparison behavior are unchanged.
+
 ## [0.4.2] - 2026-09-15
 
 ### Fixed
@@ -112,7 +140,8 @@ All notable changes to SSRWire are documented here. The project follows
 - Terminal, JSON, and SARIF reports with CI-safe exit codes.
 - YAML configuration, one-off URL checks, Docker support, and GitHub Actions examples.
 
-[Unreleased]: https://github.com/lame13/ssrwire/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/lame13/ssrwire/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/lame13/ssrwire/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/lame13/ssrwire/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/lame13/ssrwire/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/lame13/ssrwire/compare/v0.3.0...v0.4.0

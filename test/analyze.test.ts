@@ -538,6 +538,107 @@ describe("analyzeTarget", () => {
   });
 });
 
+function withRobotsHeader(value: string, agent: AgentProfile = browserAgent): ProbeResult {
+  return probe({
+    agent,
+    headers: {
+      values: { "content-type": "text/html", "x-robots-tag": value },
+      setCookiePresent: false,
+    },
+  });
+}
+
+describe("X-Robots-Tag response header", () => {
+  it("ignores a header that applies to a different crawler", () => {
+    const findings = analyzeTarget(target(), [
+      probe({
+        agent: browserAgent,
+        headers: {
+          values: { "content-type": "text/html", "x-robots-tag": "googlebot: noindex" },
+          setCookiePresent: false,
+        },
+      }),
+    ]);
+    expect(findings.filter((finding) => finding.code.startsWith("robots-header"))).toEqual([]);
+  });
+
+  it("treats a scoped header as applying to the crawler it names", () => {
+    const findings = analyzeTarget(target(), [
+      {
+        ...withRobotsHeader("googlebot: noindex"),
+        agent: googlebotAgent,
+      },
+    ]);
+    expect(findings).toMatchObject([
+      { code: "robots-header-noindex", severity: "error", agent: "googlebot" },
+    ]);
+  });
+
+  it("fails a page that a global noindex header removes from search", () => {
+    const findings = analyzeTarget(target(), [withRobotsHeader("noindex, noarchive")]);
+    const finding = findings.find((entry) => entry.code === "robots-header-noindex");
+
+    expect(finding).toMatchObject({ severity: "error", agent: "browser" });
+    expect(finding?.evidence).toMatchObject({ directives: "noarchive, noindex" });
+    expect(finding?.message).toContain("blocks indexing");
+  });
+
+  it("warns about restrictive directives that keep the page indexed", () => {
+    const findings = analyzeTarget(target(), [withRobotsHeader("nofollow, nosnippet")]);
+    expect(findings).toMatchObject([{ code: "robots-header-restrictive", severity: "warning" }]);
+    expect(findings.some((entry) => entry.code === "robots-header-noindex")).toBe(false);
+  });
+
+  it("reads a parameterised directive instead of mistaking it for a crawler scope", () => {
+    const findings = analyzeTarget(target(), [
+      withRobotsHeader("unavailable_after: 25 Jun 2010 15:00:00 PST"),
+    ]);
+
+    expect(findings).toMatchObject([
+      { code: "robots-header-restrictive", severity: "warning", agent: "browser" },
+    ]);
+    expect(findings[0]?.evidence).toMatchObject({ directives: "unavailable_after" });
+  });
+
+  it("reads a parameterised directive that is scoped to one crawler", () => {
+    const findings = analyzeTarget(target(), [
+      withRobotsHeader("googlebot: unavailable_after: 25 Jun 2010 15:00:00 PST"),
+      withRobotsHeader("googlebot: unavailable_after: 25 Jun 2010 15:00:00 PST", googlebotAgent),
+    ]);
+
+    expect(findings).toMatchObject([
+      {
+        code: "robots-header-restrictive",
+        agent: "googlebot",
+        evidence: { agentScopedDirectives: 1 },
+      },
+    ]);
+  });
+
+  it("keeps a parameterised directive that is not a restriction quiet", () => {
+    expect(analyzeTarget(target(), [withRobotsHeader("max-snippet: -1")])).toEqual([]);
+  });
+
+  it("notes a permissive header that a meta robots tag overrides", () => {
+    const signals = { ...healthySignals(), robots: [robotsSignal("noindex", "robots", 35)] };
+    const findings = analyzeTarget(target(), [
+      probe({
+        signals,
+        headers: {
+          values: { "content-type": "text/html", "x-robots-tag": "index, follow" },
+          setCookiePresent: false,
+        },
+      }),
+    ]);
+    expect(findings).toMatchObject([{ code: "robots-header-ineffective", severity: "info" }]);
+  });
+
+  it("stays quiet when the header is absent or empty", () => {
+    expect(analyzeTarget(target(), [probe()])).toEqual([]);
+    expect(analyzeTarget(target(), [withRobotsHeader("   ")])).toEqual([]);
+  });
+});
+
 describe("summarizeAudit", () => {
   it("counts probes, severities, and incomplete runs", () => {
     const probes = [probe(), probe({ completion: "network-error" })];

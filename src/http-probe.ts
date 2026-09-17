@@ -33,6 +33,7 @@ const SNAPSHOT_HEADERS = Object.freeze([
   "x-cache-hits",
   "x-nextjs-cache",
   "x-powered-by",
+  "x-robots-tag",
   "x-vercel-cache",
 ] as const);
 
