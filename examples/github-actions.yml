@@ -27,7 +27,7 @@ jobs:
         if: github.event_name == 'pull_request'
         continue-on-error: true
         run: >-
-          npx --yes ssrwire@0.4.2 check
+          npx --yes ssrwire@0.5.0 check
           --config ssrwire.config.yml
           --format sarif
           --output reports/ssrwire.sarif
@@ -37,8 +37,10 @@ jobs:
         id: ssrwire_trusted
         if: github.event_name != 'pull_request'
         continue-on-error: true
+        # Swap --format sarif for --format html to publish a report people can read without a
+        # terminal, or add a second job so the extra requests run only when you want them.
         run: >-
-          npx --yes ssrwire@0.4.2 check
+          npx --yes ssrwire@0.5.0 check
           --config ssrwire.config.yml
           --format sarif
           --output reports/ssrwire.sarif

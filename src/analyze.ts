@@ -35,6 +35,77 @@ const ROBOTS_OPPOSITES = [
   ["imageindex", "noimageindex"],
 ] as const;
 
+/** Directives that remove a page from results entirely. */
+const ROBOTS_HEADER_BLOCKING = new Set(["noindex", "none"]);
+/** Directives that restrict a page while keeping it indexed. */
+const ROBOTS_HEADER_RESTRICTIVE = new Set([
+  "nofollow",
+  "noarchive",
+  "nosnippet",
+  "notranslate",
+  "noimageindex",
+  "unavailable_after",
+]);
+const ROBOTS_HEADER_PERMISSIVE = new Set(["index", "follow", "all"]);
+/** Directives that take a parameter, so their colon belongs to the directive, not to a scope. */
+const ROBOTS_HEADER_PARAMETERIZED = new Set([
+  "max-image-preview",
+  "max-snippet",
+  "max-video-preview",
+  "unavailable_after",
+]);
+const ROBOTS_HEADER_EVIDENCE_LIMIT = 300;
+
+interface RobotsHeaderDirective {
+  readonly directive: string;
+  /** User agent the directive is scoped to, or undefined when it applies to every crawler. */
+  readonly scope?: string;
+}
+
+/**
+ * Split an X-Robots-Tag value into directives.
+ *
+ * The header accepts a comma-separated list where a directive may be scoped to one user agent,
+ * such as `X-Robots-Tag: googlebot: noindex`. Repeated header lines arrive joined with commas.
+ * A parameterised directive such as `unavailable_after: 25 Jun 2010 15:00:00 PST` carries a colon
+ * of its own, so only a parameterless name can scope a directive to a crawler.
+ */
+function parseRobotsHeader(value: string): readonly RobotsHeaderDirective[] {
+  const directives: RobotsHeaderDirective[] = [];
+  for (const part of value.split(",")) {
+    const token = part.trim();
+    if (token.length === 0) continue;
+    const separator = token.indexOf(":");
+    if (separator === -1) {
+      directives.push({ directive: token.toLowerCase() });
+      continue;
+    }
+    const name = token.slice(0, separator).trim().toLowerCase();
+    const rest = token.slice(separator + 1).trim();
+    if (name.length === 0 || rest.length === 0) continue;
+    if (ROBOTS_HEADER_PARAMETERIZED.has(name)) {
+      directives.push({ directive: name });
+      continue;
+    }
+    // The scoped value may be parameterised in turn: `googlebot: unavailable_after: 25 Jun 2010`.
+    directives.push({ scope: name, directive: directiveName(rest) });
+  }
+  return directives;
+}
+
+/** The directive name of a token, ignoring any parameter that follows its colon. */
+function directiveName(value: string): string {
+  const separator = value.indexOf(":");
+  return (separator === -1 ? value : value.slice(0, separator)).trim().toLowerCase();
+}
+
+function robotsHeaderApplies(directive: RobotsHeaderDirective, probe: ProbeResult): boolean {
+  if (directive.scope === undefined) return true;
+  if (directive.scope === probe.agent.key.trim().toLowerCase()) return true;
+  // A scoped header names a product token, which is what user-agent matching uses in practice.
+  return probe.agent.userAgent.toLowerCase().includes(directive.scope);
+}
+
 interface FindingInput {
   readonly code: string;
   readonly severity: Severity;
@@ -273,6 +344,79 @@ function checkRepeatedRobots(findings: Finding[], targetUrl: string, probe: Prob
         distinctValues: new Set([...genericDirectives, ...specificDirectives]).size,
         values: [...new Set([...genericDirectives, ...specificDirectives])].sort().join(","),
       },
+    });
+  }
+}
+
+/**
+ * Check the X-Robots-Tag response header.
+ *
+ * Header directives outrank anything in the document and apply to every byte of the response, so
+ * a leftover `noindex` from staging, a CDN rule, or a security incident can remove a page from
+ * search results while the HTML itself looks complete. Meta robots tags are visible in the markup;
+ * this header is not, which is why SSRWire checks it explicitly per crawler profile.
+ */
+function checkRobotsHeader(findings: Finding[], target: AuditTarget, probe: ProbeResult): void {
+  const raw = probe.headers.values["x-robots-tag"];
+  if (raw === undefined || raw.trim().length === 0) {
+    return;
+  }
+
+  const applicable = parseRobotsHeader(raw).filter((directive) =>
+    robotsHeaderApplies(directive, probe),
+  );
+  if (applicable.length === 0) {
+    return;
+  }
+
+  const present = new Set(applicable.map((directive) => directive.directive));
+  const blocking = [...present].filter((directive) => ROBOTS_HEADER_BLOCKING.has(directive)).sort();
+  const restrictive = [...present]
+    .filter((directive) => ROBOTS_HEADER_RESTRICTIVE.has(directive))
+    .sort();
+  const scoped = applicable.filter((directive) => directive.scope !== undefined).length;
+  const evidence = {
+    header:
+      raw.length > ROBOTS_HEADER_EVIDENCE_LIMIT
+        ? `${raw.slice(0, ROBOTS_HEADER_EVIDENCE_LIMIT)}…`
+        : raw,
+    directives: [...present].sort().join(", "),
+    agentScopedDirectives: scoped,
+  };
+
+  if (blocking.length > 0) {
+    addFinding(findings, target.url, {
+      code: "robots-header-noindex",
+      severity: "error",
+      message: `${probe.agent.label} received an X-Robots-Tag header that blocks indexing (${blocking.join(", ")}).`,
+      agent: probe.agent.key,
+      evidence,
+    });
+    return;
+  }
+
+  if (restrictive.length > 0) {
+    addFinding(findings, target.url, {
+      code: "robots-header-restrictive",
+      severity: "warning",
+      message: `${probe.agent.label} received restrictive X-Robots-Tag directives (${restrictive.join(", ")}).`,
+      agent: probe.agent.key,
+      evidence,
+    });
+    return;
+  }
+
+  // A permissive header cannot relax a restrictive meta tag, so reporting it as effective would
+  // leave the real exclusion hidden in the document.
+  const permits = [...present].some((directive) => ROBOTS_HEADER_PERMISSIVE.has(directive));
+  const metaBlocks = normalizedRobotsDirectives(effectiveRobotsSignals(probe)).has("noindex");
+  if (permits && metaBlocks) {
+    addFinding(findings, target.url, {
+      code: "robots-header-ineffective",
+      severity: "info",
+      message: `${probe.agent.label} received an X-Robots-Tag header that a meta robots tag overrides.`,
+      agent: probe.agent.key,
+      evidence: { ...evidence, effective: "meta robots noindex" },
     });
   }
 }
@@ -756,6 +900,7 @@ export function analyzeTarget(
     checkRepeatedMetadata(findings, target.url, probe, "description", probe.signals.descriptions);
     checkRepeatedMetadata(findings, target.url, probe, "canonical", probe.signals.canonicals);
     checkRepeatedRobots(findings, target.url, probe);
+    checkRobotsHeader(findings, target, probe);
     checkSocialMetadata(findings, target, probe);
 
     const invalidJsonLd = probe.signals.jsonLd.filter((signal) => signal.valid === false);

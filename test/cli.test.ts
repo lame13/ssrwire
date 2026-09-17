@@ -35,6 +35,24 @@ afterEach(async () => {
   }
 });
 
+/** A page that is complete except for its canonical link, so findings are produced. */
+async function servePageWithoutCanonical(): Promise<string> {
+  server = createServer((_request, response) => {
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    response.end(`<!doctype html>
+      <html><head>
+        <title>Incomplete fixture</title>
+        <meta name="description" content="A fixture without a canonical link">
+      </head><body><main><h1>Fixture heading</h1><p>Useful main content.</p></main></body></html>`);
+  });
+  await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Fixture server did not bind.");
+  }
+  return `http://127.0.0.1:${address.port}/page`;
+}
+
 async function serveHealthyPage(): Promise<string> {
   server = createServer((request, response) => {
     const origin = `http://${request.headers.host}`;
@@ -106,6 +124,45 @@ describe("CLI", () => {
     expect(process.exitCode ?? 0).toBe(0);
   });
 
+  it("writes a readable HTML report with framework fix recipes", async () => {
+    const url = await servePageWithoutCanonical();
+    const directory = await mkdtemp(join(tmpdir(), "ssrwire-cli-html-"));
+    const reportPath = join(directory, "ssrwire.html");
+
+    await main([
+      "node",
+      "ssrwire",
+      url,
+      "--agent",
+      "browser",
+      "--agent",
+      "gptbot",
+      "--format",
+      "html",
+      "--output",
+      reportPath,
+      "--framework",
+      "nextjs",
+    ]);
+
+    const report = await readFile(reportPath, "utf8");
+    expect(report.startsWith("<!doctype html>")).toBe(true);
+    expect(report).toContain("No canonical URL");
+    expect(report).toContain("The page works, with room to improve");
+    expect(report).toContain("GPTBot (OpenAI)");
+    expect(report).toContain("Next.js example");
+    expect(report).not.toContain("<script");
+    expect(stderr).toContain("SSRWire wrote html report");
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("describes the check formats and framework option in help output", async () => {
+    await main(["node", "ssrwire", "check", "--help"]);
+
+    expect(stdout).toContain("--framework <name>");
+    expect(stdout).toContain("terminal, json, sarif, or html");
+  });
+
   it("enforces social-preview contracts from strict YAML configuration", async () => {
     const url = await serveHealthyPage();
     const directory = await mkdtemp(join(tmpdir(), "ssrwire-cli-social-"));
@@ -153,8 +210,8 @@ agents: [browser]
   });
 
   it("keeps check and comparison format and failure policies separate", async () => {
-    await main(["node", "ssrwire", "https://example.com", "--format", "html"]);
-    expect(stderr).toContain("Expected terminal, json, or sarif");
+    await main(["node", "ssrwire", "https://example.com", "--format", "yaml"]);
+    expect(stderr).toContain("Expected terminal, json, sarif, or html");
     expect(process.exitCode).toBe(2);
 
     stdout = "";

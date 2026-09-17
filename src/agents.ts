@@ -32,9 +32,58 @@ export const BUILTIN_AGENTS: Readonly<Record<string, AgentProfile>> = Object.fre
     userAgent: "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
     requiresHeadMetadata: true,
   }),
+  // AI crawler profiles. These request and parse HTML without executing JavaScript, but they
+  // read the whole document, so they are not head-only parsers. User-agent strings carry the
+  // published product token, which is what user-agent branching on a target actually matches;
+  // the surrounding browser tokens and version numbers change over time.
+  gptbot: Object.freeze({
+    key: "gptbot",
+    label: "GPTBot (OpenAI)",
+    userAgent:
+      "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.1; +https://openai.com/gptbot",
+    requiresHeadMetadata: false,
+  }),
+  "oai-searchbot": Object.freeze({
+    key: "oai-searchbot",
+    label: "OAI-SearchBot (OpenAI)",
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36; compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot",
+    requiresHeadMetadata: false,
+  }),
+  "chatgpt-user": Object.freeze({
+    key: "chatgpt-user",
+    label: "ChatGPT-User (OpenAI)",
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36; compatible; ChatGPT-User/1.0; +https://openai.com/bot",
+    requiresHeadMetadata: false,
+  }),
+  claudebot: Object.freeze({
+    key: "claudebot",
+    label: "ClaudeBot (Anthropic)",
+    userAgent:
+      "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ClaudeBot/1.0; +claudebot@anthropic.com",
+    requiresHeadMetadata: false,
+  }),
+  perplexitybot: Object.freeze({
+    key: "perplexitybot",
+    label: "PerplexityBot",
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36; compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot",
+    requiresHeadMetadata: false,
+  }),
 });
 
-export type BuiltinAgentKey = "browser" | "googlebot" | "bingbot" | "twitterbot" | "facebook";
+export type BuiltinAgentKey =
+  | "browser"
+  | "googlebot"
+  | "bingbot"
+  | "twitterbot"
+  | "facebook"
+  | "gptbot"
+  | "oai-searchbot"
+  | "chatgpt-user"
+  | "claudebot"
+  | "perplexitybot";
 export type AgentInput =
   | string
   | {
@@ -57,6 +106,20 @@ const ALIASES: Readonly<Record<string, BuiltinAgentKey>> = Object.freeze({
   facebook: "facebook",
   facebookbot: "facebook",
   facebookexternalhit: "facebook",
+  gpt: "gptbot",
+  gptbot: "gptbot",
+  openai: "gptbot",
+  "oai-searchbot": "oai-searchbot",
+  oaisearchbot: "oai-searchbot",
+  searchbot: "oai-searchbot",
+  "chatgpt-user": "chatgpt-user",
+  chatgptuser: "chatgpt-user",
+  chatgpt: "chatgpt-user",
+  claude: "claudebot",
+  claudebot: "claudebot",
+  anthropic: "claudebot",
+  perplexity: "perplexitybot",
+  perplexitybot: "perplexitybot",
 });
 
 function isCustomAgent(value: unknown): value is Exclude<AgentInput, string> {
@@ -86,7 +149,9 @@ export function resolveAgent(input: AgentInput): AgentProfile {
     const key = ALIASES[normalized];
     if (key === undefined) {
       throw new Error(
-        `Unknown agent "${input}". Use browser, googlebot, bingbot, twitterbot, facebook, or a custom agent object.`,
+        `Unknown agent "${input}". Use a built-in profile such as browser, googlebot, bingbot, ` +
+          "twitterbot, facebook, gptbot, oai-searchbot, chatgpt-user, claudebot, perplexitybot, " +
+          "or a custom agent object.",
       );
     }
     const agent = BUILTIN_AGENTS[key];

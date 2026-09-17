@@ -15,6 +15,33 @@ export {
   renderComparisonTerminal,
 } from "./comparison-reporters.js";
 export { loadConfig, parseHeaderOption } from "./config.js";
+export {
+  type AuditVerdict,
+  auditVerdict,
+  detectedFrameworkLabel,
+  type ExplanationContext,
+  explainFinding,
+  type FindingExplanation,
+  type FindingSnippet,
+  type NextStep,
+  nextSteps,
+  targetVerdict,
+  type VerdictKind,
+} from "./explain.js";
+export {
+  detectFrameworkFromProbes,
+  detectProjectFramework,
+  FRAMEWORK_KEYS,
+  type FrameworkDetection,
+  type FrameworkKey,
+  frameworkLabel,
+  isFrameworkKey,
+} from "./framework.js";
+export {
+  type AuditPolicyOutcome,
+  type AuditReportOptions,
+  renderAuditHtml,
+} from "./html-report.js";
 export { probeUrl } from "./http-probe.js";
 export { redactProbe } from "./redact.js";
 export { renderJson, renderReport, renderSarif, renderTerminal } from "./reporters.js";
