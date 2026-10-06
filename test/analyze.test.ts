@@ -639,6 +639,109 @@ describe("X-Robots-Tag response header", () => {
   });
 });
 
+const disallowedRobots = {
+  url: "https://example.com/robots.txt",
+  fetched: true,
+  status: 200,
+  verdict: "disallowed",
+  matched: "Disallow: /page",
+} as const;
+
+describe("robots.txt findings", () => {
+  it("reports a disallowed URL as an error", () => {
+    const findings = analyzeTarget(target(), [probe({ robotsTxt: disallowedRobots })]);
+
+    expect(findings.map((finding) => finding.code)).toContain("robots-txt-disallowed");
+    expect(findings.find((finding) => finding.code === "robots-txt-disallowed")?.severity).toBe(
+      "error",
+    );
+  });
+
+  it("also flags the contradiction when meta robots still permits indexing", () => {
+    const findings = analyzeTarget(target(), [probe({ robotsTxt: disallowedRobots })]);
+
+    expect(findings.map((finding) => finding.code)).toContain("robots-txt-conflict");
+  });
+
+  it("stays quiet about the contradiction when the page already says noindex", () => {
+    const signals = {
+      ...healthySignals(),
+      robots: [robotsSignal("noindex")],
+    };
+    const findings = analyzeTarget(target(), [probe({ signals, robotsTxt: disallowedRobots })]);
+
+    expect(findings.map((finding) => finding.code)).toContain("robots-txt-disallowed");
+    expect(findings.map((finding) => finding.code)).not.toContain("robots-txt-conflict");
+  });
+
+  it("reports an unreadable robots.txt as information rather than a guess", () => {
+    const findings = analyzeTarget(target(), [
+      probe({
+        robotsTxt: {
+          url: "https://example.com/robots.txt",
+          fetched: false,
+          verdict: "unavailable",
+          error: "connection reset",
+        },
+      }),
+    ]);
+
+    const finding = findings.find((item) => item.code === "robots-txt-unavailable");
+    expect(finding?.severity).toBe("info");
+    expect(finding?.evidence).toMatchObject({ error: "connection reset" });
+  });
+
+  it("does not report anything when robots.txt allows the URL", () => {
+    const findings = analyzeTarget(target(), [
+      probe({
+        robotsTxt: {
+          url: "https://example.com/robots.txt",
+          fetched: true,
+          status: 200,
+          verdict: "allowed",
+        },
+      }),
+    ]);
+
+    expect(findings.some((finding) => finding.code.startsWith("robots-txt-"))).toBe(false);
+  });
+});
+
+describe("content encoding findings", () => {
+  it("notes that byte positions are post-decoding when identity encoding is ignored", () => {
+    const findings = analyzeTarget(target(), [
+      probe({
+        headers: {
+          values: { "content-type": "text/html", "content-encoding": "gzip" },
+          setCookiePresent: false,
+        },
+      }),
+    ]);
+
+    const finding = findings.find((item) => item.code === "content-encoding-ignored");
+    expect(finding?.severity).toBe("info");
+    expect(finding?.evidence).toMatchObject({ contentEncoding: "gzip" });
+  });
+
+  it("stays quiet for identity and missing content-encoding", () => {
+    const explicit = analyzeTarget(target(), [
+      probe({
+        headers: {
+          values: { "content-type": "text/html", "content-encoding": "identity" },
+          setCookiePresent: false,
+        },
+      }),
+    ]);
+
+    expect(explicit.some((finding) => finding.code === "content-encoding-ignored")).toBe(false);
+    expect(
+      analyzeTarget(target(), [probe()]).some(
+        (finding) => finding.code === "content-encoding-ignored",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("summarizeAudit", () => {
   it("counts probes, severities, and incomplete runs", () => {
     const probes = [probe(), probe({ completion: "network-error" })];
@@ -659,6 +762,13 @@ describe("summarizeAudit", () => {
       warnings: 0,
       info: 1,
       incomplete: 1,
+      waived: 0,
     });
+  });
+
+  it("carries the waived count supplied by the waiver pass", () => {
+    expect(
+      summarizeAudit([{ target: target(), probes: [probe()], findings: [] }], 3),
+    ).toMatchObject({ waived: 3 });
   });
 });

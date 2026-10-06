@@ -1,7 +1,17 @@
 import { z } from "zod";
 import type { AuditResult } from "./types.js";
 
-export const AUDIT_SCHEMA_VERSION = 1 as const;
+/**
+ * Current persisted audit-report contract.
+ *
+ * Version 2 adds `robotsTxt` and `stream` probe evidence, `summary.waived`, and the top-level
+ * `waivers` policy record. Every version-2 addition is optional, so a version-1 report stays
+ * readable and comparable; SSRWire only refuses reports from a newer contract than it knows.
+ */
+export const AUDIT_SCHEMA_VERSION = 2 as const;
+
+/** Contract versions this build can read. */
+export const SUPPORTED_AUDIT_SCHEMA_VERSIONS = [1, 2] as const;
 
 const nonNegativeNumber = z.number().finite().nonnegative();
 const nonNegativeInteger = z.number().int().nonnegative();
@@ -103,6 +113,26 @@ const probeTimings = z
   })
   .strict();
 
+const streamShape = z
+  .object({
+    chunks: nonNegativeInteger,
+    spannedMs: nonNegativeNumber,
+    maxGapMs: nonNegativeNumber,
+    idleMs: nonNegativeNumber,
+  })
+  .strict();
+
+const robotsTxtEvidence = z
+  .object({
+    url: z.string(),
+    fetched: z.boolean(),
+    status: z.number().int().min(100).max(599).optional(),
+    verdict: z.enum(["allowed", "disallowed", "unavailable"]),
+    matched: z.string().optional(),
+    error: z.string().optional(),
+  })
+  .strict();
+
 const probeResult = z
   .object({
     requestedUrl: z.string(),
@@ -123,6 +153,8 @@ const probeResult = z
       "invalid-response",
     ]),
     error: z.string().optional(),
+    stream: streamShape.optional(),
+    robotsTxt: robotsTxtEvidence.optional(),
     sample: z.number().int().positive().optional(),
   })
   .strict();
@@ -222,18 +254,30 @@ const auditSummary = z
     warnings: nonNegativeInteger,
     info: nonNegativeInteger,
     incomplete: nonNegativeInteger,
+    waived: nonNegativeInteger.optional(),
+  })
+  .strict();
+
+const waiverRecord = z
+  .object({
+    code: z.string().min(1),
+    target: z.string().min(1).optional(),
+    agent: z.string().min(1).optional(),
+    reason: z.string().min(1),
+    until: z.string().min(1).optional(),
   })
   .strict();
 
 const auditReportSchema = z
   .object({
-    schemaVersion: z.literal(AUDIT_SCHEMA_VERSION),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     version: z.string().min(1),
     generatedAt: z.string().min(1),
     durationMs: nonNegativeNumber,
     repeat: z.number().int().min(1).max(10).optional(),
     results: z.array(targetAuditResult),
     summary: auditSummary,
+    waivers: z.array(waiverRecord).optional(),
   })
   .strict();
 
@@ -244,7 +288,23 @@ export class AuditReportError extends Error {
   }
 }
 
+function declaredSchemaVersion(value: unknown): number | undefined {
+  if (value === null || typeof value !== "object") {
+    return undefined;
+  }
+  const candidate = value as { readonly schemaVersion?: unknown };
+  return typeof candidate.schemaVersion === "number" ? candidate.schemaVersion : undefined;
+}
+
 export function parseAuditReport(value: unknown, source = "audit report"): AuditResult {
+  const declared = declaredSchemaVersion(value);
+  if (typeof declared === "number" && declared > AUDIT_SCHEMA_VERSION) {
+    throw new AuditReportError(
+      `${source} uses audit schemaVersion ${declared}, but this SSRWire build understands ` +
+        `up to ${AUDIT_SCHEMA_VERSION}. Upgrade SSRWire to read this report.`,
+    );
+  }
+
   const parsed = auditReportSchema.safeParse(value);
   if (!parsed.success) {
     const detail = parsed.error.issues

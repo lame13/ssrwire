@@ -275,7 +275,7 @@ function renderSocialReadiness(result: TargetAuditResult): string {
         return `<span class="absent">${present.length} of ${signals.length}</span>`;
       };
       return `<tr>
-        <th scope="row">${escapeHtml(probe.agent.label)}</th>
+        <th scope="row">${escapeHtml(probe.agent.label)}${probe.sample === undefined ? "" : ` #${probe.sample}`}</th>
         <td>${readiness(openGraph)}</td>
         <td>${readiness(twitter)}</td>
       </tr>`;
@@ -433,9 +433,66 @@ function renderTarget(
     <section class="panel"><h3>Findings</h3>${renderFindings(result, framework)}</section>
     ${hasSocial ? `<section class="panel"><h3>Social preview readiness</h3>${renderSocialReadiness(result)}</section>` : ""}
     ${renderSocialCard(result, anchor)}
+    ${renderDeliveryShape(result)}
     <section class="panel"><h3>Response and metadata timing</h3>${renderProbeTable(result, (audit.repeat ?? 1) > 1)}</section>
     <section class="panel"><h3>Streaming arrival order</h3>${renderArrivals(result)}</section>
     ${stability}
+  </section>`;
+}
+
+function robotsCell(probe: TargetAuditResult["probes"][number]): string {
+  const evidence = probe.robotsTxt;
+  if (evidence === undefined) {
+    return '<span class="muted">not read</span>';
+  }
+  if (evidence.verdict === "allowed") {
+    return `<span class="ok">allowed</span>${
+      evidence.status === undefined ? "" : ` <span class="muted">HTTP ${evidence.status}</span>`
+    }`;
+  }
+  if (evidence.verdict === "disallowed") {
+    return `<span class="bad">disallowed</span>${
+      evidence.matched === undefined ? "" : ` <code>${escapeHtml(evidence.matched)}</code>`
+    }`;
+  }
+  return `<span class="muted">unavailable</span>${
+    evidence.error === undefined ? "" : ` <span class="muted">${escapeHtml(evidence.error)}</span>`
+  }`;
+}
+
+/**
+ * Delivery shape: how many chunks arrived, how far apart, and what robots.txt says about each
+ * profile. Chunk counts describe what this client observed, not the origin's flush calls, so the
+ * panel states that limit rather than implying server behaviour.
+ */
+function renderDeliveryShape(result: TargetAuditResult): string {
+  const relevant = result.probes.some(
+    (probe) => probe.stream !== undefined || probe.robotsTxt !== undefined,
+  );
+  if (!relevant) {
+    return "";
+  }
+
+  const rows = result.probes
+    .map((probe) => {
+      const stream = probe.stream;
+      return `<tr>
+        <th scope="row">${escapeHtml(probe.agent.label)}</th>
+        <td>${stream === undefined ? '<span class="muted">—</span>' : stream.chunks}</td>
+        <td>${stream === undefined ? '<span class="muted">—</span>' : escapeHtml(formatMs(stream.spannedMs))}</td>
+        <td>${stream === undefined ? '<span class="muted">—</span>' : escapeHtml(formatMs(stream.maxGapMs))}</td>
+        <td>${robotsCell(probe)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  return `<section class="panel"><h3>Delivery shape and robots.txt</h3>
+    <div class="scroll"><table>
+      <caption class="vh">Observed body chunks and robots.txt verdict per crawler for ${escapeHtml(result.target.url)}</caption>
+      <thead><tr><th scope="col">Crawler</th><th scope="col">Chunks</th><th scope="col">Streamed over</th><th scope="col">Longest gap</th><th scope="col">robots.txt</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <p class="muted">Chunk boundaries are what SSRWire's client observed after network, TLS, compression, and buffering. A single chunk does not prove the origin sent one write. robots.txt is read once per origin with SSRWire's own request and then matched per crawler profile.</p>
   </section>`;
 }
 
@@ -454,6 +511,11 @@ function renderRunNote(audit: AuditResult, policy: AuditPolicyOutcome | undefine
     `<span>Probes</span> ${audit.summary.probes}`,
     `<span>Samples per URL and crawler</span> ${audit.repeat ?? 1}`,
   ];
+  if ((audit.summary.waived ?? 0) > 0) {
+    lines.push(
+      `<span>Waived findings</span> ${audit.summary.waived} (suppressed by configuration and not counted as failures)`,
+    );
+  }
   if (policy !== undefined) {
     lines.push(
       `<span>Policy</span> fail-on ${escapeHtml(policy.failOn)} · exit code ${policy.exitCode}`,
@@ -506,7 +568,7 @@ export function renderAuditHtml(audit: AuditResult, options: AuditReportOptions 
     .hero{display:grid;grid-template-columns:1.4fr 1fr;gap:28px;align-items:start;margin-bottom:26px}
     .hero .lede{color:var(--muted);font-size:17px}
     .outcome{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:16px 18px}
-    .counts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+    .counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:8px;margin-top:10px}
     .counts div{border-radius:10px;padding:8px;background:var(--bg)}
     .counts b{display:block;font-size:20px}
     .counts span{color:var(--muted);font-size:12px}
@@ -536,6 +598,7 @@ export function renderAuditHtml(audit: AuditResult, options: AuditReportOptions 
     .clean{color:var(--green);font-weight:650}
     .absent{color:var(--muted)}
     .ok{color:var(--green);font-weight:650}
+    .bad{color:var(--red);font-weight:650}
     .technical,.raw{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted);margin:10px 0 0;overflow-wrap:anywhere}
     .raw span{font-weight:700}
     pre{margin:0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);overflow:auto}
@@ -584,6 +647,7 @@ export function renderAuditHtml(audit: AuditResult, options: AuditReportOptions 
         <div><b>${summary.errors}</b><span>errors</span></div>
         <div><b>${summary.warnings}</b><span>warnings</span></div>
         <div><b>${summary.incomplete}</b><span>incomplete</span></div>
+        ${(summary.waived ?? 0) > 0 ? `<div><b>${summary.waived}</b><span>waived</span></div>` : ""}
       </div>
     </aside>
   </section>

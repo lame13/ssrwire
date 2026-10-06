@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const node = process.execPath;
 const npmCli = process.env.npm_execpath;
-const expectedVersion = "0.5.0";
+const expectedVersion = "0.6.0";
 
 if (!npmCli) {
   throw new Error("npm_execpath is unavailable. Run this check with npm run package:check.");
@@ -67,6 +67,16 @@ try {
     "dist/html-report.d.ts",
     "dist/index.js",
     "dist/index.d.ts",
+    "dist/ci-reporters.js",
+    "dist/ci-reporters.d.ts",
+    "dist/expect.js",
+    "dist/expect.d.ts",
+    "dist/read-body.js",
+    "dist/robots-txt.js",
+    "dist/sitemap.js",
+    "dist/sitemap.d.ts",
+    "dist/waivers.js",
+    "dist/waivers.d.ts",
     "dist/social.js",
     "dist/social.d.ts",
     "dist/stability.js",
@@ -114,7 +124,10 @@ try {
   const checkHelp = runNpm(["exec", "--", "ssrwire", "check", "--help"], installDirectory);
   if (
     !checkHelp.includes("--repeat <count>") ||
-    !checkHelp.includes("terminal, json, sarif, or html") ||
+    !checkHelp.includes("--baseline <path>") ||
+    !checkHelp.includes("--sitemap <source>") ||
+    !checkHelp.includes("--concurrency <count>") ||
+    !checkHelp.includes("junit") ||
     !checkHelp.includes("--framework <name>")
   ) {
     throw new Error("Installed CLI did not expose repeat sampling or readable reports.");
@@ -122,7 +135,9 @@ try {
   const compareHelp = runNpm(["exec", "--", "ssrwire", "compare", "--help"], installDirectory);
   if (
     !compareHelp.includes("--timing-regression-ms <ms>") ||
-    !compareHelp.includes("terminal, json, or html") ||
+    !compareHelp.includes("--format <format>") ||
+    !compareHelp.includes("markdown") ||
+    !compareHelp.includes("github") ||
     !compareHelp.includes("regression or never")
   ) {
     throw new Error("Installed CLI did not expose audit comparison.");
@@ -134,7 +149,9 @@ try {
     !initialized.includes("agents:") ||
     !initialized.includes("openGraph: false") ||
     !initialized.includes("twitterCard: false") ||
-    !initialized.includes("repeat: 1")
+    !initialized.includes("repeat: 1") ||
+    !initialized.includes("concurrency: 4") ||
+    !initialized.includes("ignore:")
   ) {
     throw new Error("Installed CLI did not create a valid starter configuration.");
   }
@@ -145,9 +162,15 @@ try {
   );
 
   const importScript = [
-    'import { VERSION, compareAudits, explainFinding, renderAuditHtml, runAudit } from "ssrwire";',
+    "import {",
+    "  VERSION, compareAudits, discoverSitemapTargets, expectNoRegressions, explainFinding,",
+    "  renderAuditHtml, renderJunit, renderMarkdown, runAudit, targetIdFromUrl,",
+    '} from "ssrwire";',
     'if (!VERSION || typeof runAudit !== "function" || typeof compareAudits !== "function") process.exit(1);',
     'if (typeof renderAuditHtml !== "function" || typeof explainFinding !== "function") process.exit(1);',
+    'if (typeof expectNoRegressions !== "function" || typeof renderJunit !== "function") process.exit(1);',
+    'if (typeof renderMarkdown !== "function" || typeof discoverSitemapTargets !== "function") process.exit(1);',
+    'if (targetIdFromUrl("https://example.com/pricing/") !== "pricing") process.exit(1);',
   ].join("\n");
   const importPath = join(installDirectory, "import-smoke.mjs");
   await writeFile(importPath, `${importScript}\n`);

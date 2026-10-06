@@ -142,6 +142,10 @@ describe("probeUrl", () => {
     expect(result.headers.values["x-not-allowlisted"]).toBeUndefined();
     expect(result.headers.setCookiePresent).toBe(true);
     expect(result.bytesRead).toBe(Buffer.byteLength(first + second));
+    expect(result.stream?.chunks).toBeGreaterThanOrEqual(2);
+    expect(result.stream?.spannedMs).toBeGreaterThan(0);
+    expect(result.stream?.maxGapMs).toBeLessThanOrEqual(result.stream?.spannedMs ?? 0);
+    expect(result.stream?.idleMs).toBeCloseTo(result.stream?.spannedMs ?? 0);
     expect(result.bodySha256).toBe(
       createHash("sha256")
         .update(first + second)

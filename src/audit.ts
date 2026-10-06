@@ -2,9 +2,11 @@ import { analyzeTarget, summarizeAudit } from "./analyze.js";
 import { AUDIT_SCHEMA_VERSION } from "./audit-report.js";
 import { probeUrl } from "./http-probe.js";
 import { redactAudit } from "./redact.js";
+import { collectRobotsTxt, robotsEvidenceFor } from "./robots-txt.js";
 import { analyzeStability } from "./stability.js";
 import type {
   AuditResult,
+  AuditTarget,
   Finding,
   ProbeOptions,
   ProbeResult,
@@ -12,8 +14,9 @@ import type {
   TargetAuditResult,
 } from "./types.js";
 import { VERSION } from "./version.js";
+import { applyWaivers } from "./waivers.js";
 
-const DEFAULT_CONCURRENCY = 4;
+export const DEFAULT_CONCURRENCY = 4;
 
 interface ProbeTask {
   readonly targetIndex: number;
@@ -62,6 +65,14 @@ function repeatCount(value: number | undefined): number {
     throw new RangeError("repeat must be an integer between 1 and 10.");
   }
   return repeat;
+}
+
+function concurrencyCount(value: number | undefined): number {
+  const concurrency = value ?? DEFAULT_CONCURRENCY;
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
+    throw new RangeError("concurrency must be an integer between 1 and 16.");
+  }
+  return concurrency;
 }
 
 function mergeEvidence(
@@ -125,6 +136,7 @@ function coalesceFindings(sampled: readonly SampleFinding[], repeat: number): re
 export async function runAudit(config: SsrWireConfig): Promise<AuditResult> {
   const started = performance.now();
   const repeat = repeatCount(config.repeat);
+  const concurrency = concurrencyCount(config.concurrency);
   const tasks: ProbeTask[] = [];
 
   for (const [targetIndex, target] of config.targets.entries()) {
@@ -146,7 +158,24 @@ export async function runAudit(config: SsrWireConfig): Promise<AuditResult> {
   }
 
   const secrets = Object.values(config.headers);
-  const lanes = await runPool<ProbeTask, ProbeLane>(tasks, DEFAULT_CONCURRENCY, async (task) => {
+
+  // robots.txt is fetched once per origin with SSRWire's own identity; per-agent verdicts are
+  // matched locally against the parsed rules using each profile's user agent string.
+  const robots = await collectRobotsTxt(
+    config.targets.map((target) => new URL(target.url).origin),
+    { timeoutMs: Math.min(config.timeoutMs, 10_000), maxBytes: Math.min(config.maxBytes, 524_288) },
+    concurrency,
+  );
+  const withRobots = (probe: ProbeResult, target: AuditTarget): ProbeResult => {
+    const evidence = robotsEvidenceFor(
+      robots.get(new URL(target.url).origin),
+      probe.agent.userAgent,
+      target.url,
+    );
+    return evidence === undefined ? probe : { ...probe, robotsTxt: evidence };
+  };
+
+  const lanes = await runPool<ProbeTask, ProbeLane>(tasks, concurrency, async (task) => {
     const probes: ProbeResult[] = [];
     for (let sample = 1; sample <= repeat; sample += 1) {
       const probe = await probeUrl(task.options);
@@ -159,7 +188,8 @@ export async function runAudit(config: SsrWireConfig): Promise<AuditResult> {
     const targetProbes = lanes
       .filter((lane) => lane.task.targetIndex === targetIndex)
       .sort((a, b) => a.task.agentIndex - b.task.agentIndex)
-      .flatMap((lane) => lane.probes);
+      .flatMap((lane) => lane.probes)
+      .map((probe) => withRobots(probe, target));
 
     if (repeat === 1) {
       return {
@@ -186,14 +216,17 @@ export async function runAudit(config: SsrWireConfig): Promise<AuditResult> {
     };
   });
 
+  const waivers = config.waivers ?? [];
+  const waived = applyWaivers(results, waivers);
   const audit: AuditResult = {
     schemaVersion: AUDIT_SCHEMA_VERSION,
     version: VERSION,
     generatedAt: new Date().toISOString(),
     durationMs: Math.round(performance.now() - started),
     ...(repeat === 1 ? {} : { repeat }),
-    results,
-    summary: summarizeAudit(results),
+    results: waived.results,
+    summary: summarizeAudit(waived.results, waived.waived),
+    ...(waivers.length === 0 ? {} : { waivers }),
   };
   return redactAudit(audit, secrets);
 }

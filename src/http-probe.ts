@@ -12,6 +12,7 @@ import type {
   ProbeResult,
   ProbeTimings,
   RedirectHop,
+  StreamShape,
 } from "./types.js";
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -49,6 +50,7 @@ interface FinalizeOptions {
   readonly completion: ProbeCompletion;
   readonly status?: number;
   readonly bodySha256?: string;
+  readonly stream?: StreamShape;
   readonly error?: string;
 }
 
@@ -125,6 +127,7 @@ function finalize(options: FinalizeOptions): ProbeResult {
     ...(options.bodySha256 === undefined ? {} : { bodySha256: options.bodySha256 }),
     signals: options.signals,
     completion: options.completion,
+    ...(options.stream === undefined ? {} : { stream: options.stream }),
     ...(options.error === undefined ? {} : { error: options.error }),
   };
 }
@@ -414,6 +417,11 @@ export async function probeUrl(options: ProbeOptions): Promise<ProbeResult> {
       let firstByteMs: number | undefined;
       let completion: ProbeCompletion = "complete";
       let error: string | undefined;
+      let chunks = 0;
+      let previousChunkMs: number | undefined;
+      let lastChunkMs = 0;
+      let maxGapMs = 0;
+      let idleMs = 0;
 
       if (response.body !== null) {
         const reader = response.body.getReader();
@@ -422,7 +430,16 @@ export async function probeUrl(options: ProbeOptions): Promise<ProbeResult> {
             const read = await reader.read();
             if (read.done) break;
             if (read.value.byteLength === 0) continue;
-            if (firstByteMs === undefined) firstByteMs = elapsedSince(startedAt);
+            const atMs = elapsedSince(startedAt);
+            if (firstByteMs === undefined) firstByteMs = atMs;
+            chunks += 1;
+            if (previousChunkMs !== undefined) {
+              const gap = atMs - previousChunkMs;
+              idleMs += gap;
+              maxGapMs = Math.max(maxGapMs, gap);
+            }
+            previousChunkMs = atMs;
+            lastChunkMs = atMs;
 
             const available = options.maxBytes - bytesRead;
             if (read.value.byteLength > available) {
@@ -430,7 +447,7 @@ export async function probeUrl(options: ProbeOptions): Promise<ProbeResult> {
                 const prefix = read.value.subarray(0, available);
                 bytesRead += prefix.byteLength;
                 hash.update(prefix);
-                inspector.write(prefix, elapsedSince(startedAt));
+                inspector.write(prefix, atMs);
               }
               completion = "max-bytes-exceeded";
               error = `Response exceeded the ${options.maxBytes} byte limit.`;
@@ -440,7 +457,7 @@ export async function probeUrl(options: ProbeOptions): Promise<ProbeResult> {
 
             bytesRead += read.value.byteLength;
             hash.update(read.value);
-            inspector.write(read.value, elapsedSince(startedAt));
+            inspector.write(read.value, atMs);
           }
         } catch {
           completion = timedOut ? "timeout" : "network-error";
@@ -457,6 +474,17 @@ export async function probeUrl(options: ProbeOptions): Promise<ProbeResult> {
         ...(firstByteMs === undefined ? {} : { firstByteMs }),
         ...(completion === "complete" ? { completeMs: completedAt } : {}),
       };
+      // Chunk boundaries are what this client observed, not the origin's flush calls; the report
+      // presents them as delivery evidence rather than as server behaviour.
+      const stream: StreamShape | undefined =
+        chunks === 0 || firstByteMs === undefined
+          ? undefined
+          : {
+              chunks,
+              spannedMs: Math.max(0, lastChunkMs - firstByteMs),
+              maxGapMs,
+              idleMs,
+            };
       return finalize({
         requestedUrl,
         finalUrl: redactText(currentUrl.href, redaction),
@@ -471,6 +499,7 @@ export async function probeUrl(options: ProbeOptions): Promise<ProbeResult> {
         signals,
         completion,
         status: response.status,
+        ...(stream === undefined ? {} : { stream }),
         ...(error === undefined ? {} : { error }),
       });
     }

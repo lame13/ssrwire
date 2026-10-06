@@ -1,5 +1,8 @@
 export type Severity = "info" | "warning" | "error";
 
+/** Version of the persisted audit-report contract. Independent of the package version. */
+export type AuditSchemaVersion = 1 | 2;
+
 export type ElementLocation = "head" | "body" | "document";
 
 export interface TimingMark {
@@ -83,6 +86,35 @@ export interface ProbeTimings {
   readonly completeMs?: number;
 }
 
+/**
+ * How the response body arrived, in client-observed chunks.
+ *
+ * Chunk boundaries are what the Fetch implementation delivered to SSRWire, so they reflect
+ * network, TLS, compression, and buffering as much as application flushing. A single chunk on a
+ * local network does not prove the origin sent one write.
+ */
+export interface StreamShape {
+  /** Number of non-empty body chunks observed. */
+  readonly chunks: number;
+  /** Milliseconds between the first and last observed chunk. */
+  readonly spannedMs: number;
+  /** Largest gap between two consecutive chunks. */
+  readonly maxGapMs: number;
+  /** Sum of every gap between consecutive chunks. */
+  readonly idleMs: number;
+}
+
+export interface RobotsTxtEvidence {
+  readonly url: string;
+  readonly fetched: boolean;
+  readonly status?: number;
+  /** Effective verdict for this probe's agent profile. */
+  readonly verdict: "allowed" | "disallowed" | "unavailable";
+  /** The robots.txt rule that decided the verdict, when one matched. */
+  readonly matched?: string;
+  readonly error?: string;
+}
+
 export type ProbeCompletion =
   | "complete"
   | "max-bytes-exceeded"
@@ -114,6 +146,10 @@ export interface ProbeResult {
   readonly signals: DocumentSignals;
   readonly completion: ProbeCompletion;
   readonly error?: string;
+  /** Present when at least one body chunk was observed. Added in SSRWire 0.6.0. */
+  readonly stream?: StreamShape;
+  /** Present when robots.txt was consulted for this probe's origin. */
+  readonly robotsTxt?: RobotsTxtEvidence;
   /** One-based audit sample number. Low-level probeUrl() calls leave this unset. */
   readonly sample?: number;
 }
@@ -150,6 +186,24 @@ export interface SsrWireConfig {
   readonly maxRedirects: number;
   /** Total samples per target and agent. Defaults to one for programmatic callers. */
   readonly repeat?: number;
+  /** Bounded parallel probes. Defaults to four for programmatic callers. */
+  readonly concurrency?: number;
+  /** Suppressions applied before findings are summarized or reported. */
+  readonly waivers?: readonly WaiverRecord[];
+}
+
+/** A documented suppression for an accepted finding. */
+export interface WaiverRecord {
+  /** Finding code to suppress, or "*" for every code. */
+  readonly code: string;
+  /** Target id or exact URL the waiver applies to. Omitted means every target. */
+  readonly target?: string;
+  /** Agent key the waiver applies to. Omitted means every agent. */
+  readonly agent?: string;
+  /** Why this finding is accepted. Required so suppressions stay reviewable. */
+  readonly reason: string;
+  /** ISO date (YYYY-MM-DD) after which the waiver stops suppressing. */
+  readonly until?: string;
 }
 
 export interface TimingStats {
@@ -210,20 +264,23 @@ export interface AuditSummary {
   readonly warnings: number;
   readonly info: number;
   readonly incomplete: number;
+  /** Findings suppressed by a waiver. Absent in reports written before schemaVersion 2. */
+  readonly waived?: number;
 }
 
 export interface AuditResult {
-  /** Version of the persisted audit-report contract, independent of the package version. */
-  readonly schemaVersion: 1;
+  readonly schemaVersion: AuditSchemaVersion;
   readonly version: string;
   readonly generatedAt: string;
   readonly durationMs: number;
   readonly repeat?: number;
   readonly results: readonly TargetAuditResult[];
   readonly summary: AuditSummary;
+  /** Waivers applied to this run, recorded so a report stays self-describing. */
+  readonly waivers?: readonly WaiverRecord[];
 }
 
-export type ReportFormat = "terminal" | "json" | "sarif" | "html";
+export type ReportFormat = "terminal" | "json" | "sarif" | "html" | "junit" | "markdown" | "github";
 
 export type ComparisonKind = "regression" | "fixed" | "changed";
 
@@ -275,7 +332,7 @@ export interface TargetComparison {
 export interface AuditReportDescriptor {
   readonly label: string;
   readonly version: string;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: AuditSchemaVersion;
   readonly generatedAt: string;
   readonly repeat: number;
 }
@@ -297,7 +354,7 @@ export interface ComparisonSummary {
 }
 
 export interface AuditComparison {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: AuditSchemaVersion;
   readonly kind: "comparison";
   readonly version: string;
   readonly generatedAt: string;
@@ -315,4 +372,4 @@ export interface CompareAuditOptions {
   readonly timingRegressionPercent?: number;
 }
 
-export type ComparisonReportFormat = "terminal" | "json" | "html";
+export type ComparisonReportFormat = "terminal" | "json" | "html" | "markdown" | "github";

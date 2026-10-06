@@ -212,6 +212,41 @@ describe("renderAuditHtml", () => {
     expect(html).toContain("could not identify the stack");
   });
 
+  it("shows observed chunking and the robots.txt verdict, and counts waived findings", () => {
+    const withEvidence = audit(
+      targetResult({
+        probes: [
+          probe({
+            stream: { chunks: 4, spannedMs: 210, maxGapMs: 90, idleMs: 150 },
+            robotsTxt: {
+              url: "https://example.com/robots.txt",
+              fetched: true,
+              status: 200,
+              verdict: "disallowed",
+              matched: "Disallow: /page",
+            },
+          }),
+        ],
+      }),
+    );
+
+    const html = renderAuditHtml({
+      ...withEvidence,
+      summary: { ...withEvidence.summary, waived: 3 },
+    });
+
+    expect(html).toContain("Delivery shape and robots.txt");
+    expect(html).toContain(">4<");
+    expect(html).toContain("Disallow: /page");
+    expect(html).toContain("disallowed");
+    expect(html).toContain("Waived findings");
+    expect(html).toContain("<b>3</b><span>waived</span>");
+  });
+
+  it("omits the delivery panel when no probe recorded chunks or robots.txt", () => {
+    expect(renderAuditHtml(audit())).not.toContain("Delivery shape and robots.txt");
+  });
+
   it("gives every target a unique labelled section anchor", () => {
     const first = targetResult();
     const second = targetResult({

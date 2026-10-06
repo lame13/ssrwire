@@ -3,12 +3,21 @@ import { extname, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { type AgentInput, resolveAgents } from "./agents.js";
-import type { AgentProfile, AuditTarget, SsrWireConfig, TargetExpectations } from "./types.js";
+import type {
+  AgentProfile,
+  AuditTarget,
+  SsrWireConfig,
+  TargetExpectations,
+  WaiverRecord,
+} from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_REDIRECTS = 10;
 const DEFAULT_REPEAT = 1;
+const DEFAULT_CONCURRENCY = 4;
+const MIN_CONCURRENCY = 1;
+const MAX_CONCURRENCY = 16;
 const DEFAULT_AGENTS = ["browser", "googlebot", "bingbot", "twitterbot"] as const;
 const DEFAULT_CONFIG_FILES = [
   "ssrwire.config.yml",
@@ -57,6 +66,23 @@ const agentObjectSchema = z
   })
   .strict();
 
+const waiverSchema = z
+  .object({
+    code: z.string().regex(/^\*$|^[a-z0-9][a-z0-9-]{0,63}$/, {
+      message: "expected a finding code such as 'missing-description', or '*'",
+    }),
+    target: z.string().min(1).optional(),
+    agent: z.string().min(1).optional(),
+    reason: z.string().trim().min(1).max(500),
+    until: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, {
+        message: "expected an ISO date such as 2026-12-31",
+      })
+      .optional(),
+  })
+  .strict();
+
 const fileConfigSchema = z
   .object({
     targets: z.array(z.union([z.string().min(1), targetObjectSchema])).optional(),
@@ -64,6 +90,7 @@ const fileConfigSchema = z
       .array(z.union([z.string().min(1), agentObjectSchema]))
       .min(1)
       .optional(),
+    ignore: z.array(waiverSchema).optional(),
     headers: z.record(z.string(), z.string()).optional(),
     timeoutMs: z.number().int().min(100).max(120_000).optional(),
     maxBytes: z
@@ -74,6 +101,7 @@ const fileConfigSchema = z
       .optional(),
     maxRedirects: z.number().int().min(0).max(20).optional(),
     repeat: z.number().int().min(1).max(10).optional(),
+    concurrency: z.number().int().min(MIN_CONCURRENCY).max(MAX_CONCURRENCY).optional(),
   })
   .strict();
 
@@ -82,13 +110,21 @@ type FileConfig = z.infer<typeof fileConfigSchema>;
 export interface LoadConfigOptions {
   readonly configPath?: string;
   readonly urls?: readonly string[];
+  /** Targets discovered from a sitemap. Explicit config and CLI targets win for the same URL. */
+  readonly discovered?: readonly SitemapTarget[];
   readonly agents?: readonly string[];
   readonly headers?: readonly string[];
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
   readonly repeat?: number;
+  readonly concurrency?: number;
   readonly cwd?: string;
+}
+
+export interface SitemapTarget {
+  readonly url: string;
+  readonly id: string;
 }
 
 export class ConfigError extends Error {
@@ -122,8 +158,10 @@ function normalizeStatuses(value: number | number[] | undefined): readonly numbe
   return [...new Set(statuses)];
 }
 
-function normalizeTarget(value: string | z.infer<typeof targetObjectSchema>): AuditTarget {
-  const item = typeof value === "string" ? { url: value } : value;
+type TargetInput = z.infer<typeof targetObjectSchema>;
+
+function normalizeTarget(value: string | TargetInput): AuditTarget {
+  const item: TargetInput = typeof value === "string" ? { url: value } : value;
   const required = item.require;
   const expectations: TargetExpectations = {
     statuses: normalizeStatuses(item.expectedStatus),
@@ -326,6 +364,68 @@ function uniqueTargets(targets: readonly AuditTarget[]): readonly AuditTarget[] 
   return unique;
 }
 
+function isRealDate(value: string): boolean {
+  const [year, month, day] = value.split("-").map(Number);
+  if (year === undefined || month === undefined || day === undefined) {
+    return false;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
+
+/**
+ * Resolve waiver references against the targets and agents that actually exist.
+ *
+ * A typo in a waiver silently stops suppressing anything, which is the exact failure mode
+ * waivers are meant to prevent, so unknown target and agent references are rejected instead.
+ */
+function normalizeWaivers(
+  configured: readonly z.infer<typeof waiverSchema>[] | undefined,
+  targets: readonly AuditTarget[],
+  agents: readonly AgentProfile[],
+): readonly WaiverRecord[] {
+  if (configured === undefined || configured.length === 0) {
+    return [];
+  }
+
+  const targetIds = new Set(
+    targets.map((target) => target.id).filter((id): id is string => id !== undefined),
+  );
+  const targetUrls = new Set(targets.map((target) => target.url));
+  const agentKeys = new Set(agents.map((agent) => agent.key));
+
+  return configured.map((waiver) => {
+    if (waiver.until !== undefined && !isRealDate(waiver.until)) {
+      throw new ConfigError(`ignore entry for ${waiver.code} has an invalid 'until' date.`);
+    }
+    if (
+      waiver.target !== undefined &&
+      !targetIds.has(waiver.target) &&
+      !targetUrls.has(waiver.target)
+    ) {
+      throw new ConfigError(
+        `ignore entry for ${waiver.code} references unknown target '${waiver.target}'. ` +
+          "Use a configured target id or an exact target URL.",
+      );
+    }
+    if (waiver.agent !== undefined && !agentKeys.has(waiver.agent)) {
+      throw new ConfigError(
+        `ignore entry for ${waiver.code} references unknown agent '${waiver.agent}'. ` +
+          `Known agents: ${[...agentKeys].join(", ")}.`,
+      );
+    }
+    return {
+      code: waiver.code,
+      ...(waiver.target === undefined ? {} : { target: waiver.target }),
+      ...(waiver.agent === undefined ? {} : { agent: waiver.agent }),
+      reason: waiver.reason,
+      ...(waiver.until === undefined ? {} : { until: waiver.until }),
+    };
+  });
+}
+
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWireConfig> {
   const cwd = options.cwd ?? process.cwd();
   const configPath = await resolveConfigPath(options.configPath, cwd);
@@ -333,13 +433,16 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
   const fileTargets = dedupeTargets((file.targets ?? []).map(normalizeTarget), {
     rejectConflicts: true,
   });
+  const discoveredTargets = dedupeTargets((options.discovered ?? []).map(normalizeTarget), {
+    rejectConflicts: false,
+  });
   const cliTargets = dedupeTargets((options.urls ?? []).map(normalizeTarget), {
     rejectConflicts: false,
   });
-  const targets = uniqueTargets([...fileTargets, ...cliTargets]);
+  const targets = uniqueTargets([...fileTargets, ...cliTargets, ...discoveredTargets]);
   if (targets.length === 0) {
     throw new ConfigError(
-      "No target URL was provided. Pass a URL or add targets to ssrwire.config.yml.",
+      "No target URL was provided. Pass a URL, add targets to ssrwire.config.yml, or use --sitemap.",
     );
   }
 
@@ -361,6 +464,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
   const maxBytes = options.maxBytes ?? file.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxRedirects = options.maxRedirects ?? file.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
   const repeat = options.repeat ?? file.repeat ?? DEFAULT_REPEAT;
+  const concurrency = options.concurrency ?? file.concurrency ?? DEFAULT_CONCURRENCY;
 
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 120_000) {
     throw new ConfigError("timeoutMs must be an integer between 100 and 120000.");
@@ -374,6 +478,15 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
   if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) {
     throw new ConfigError("repeat must be an integer between 1 and 10.");
   }
+  if (
+    !Number.isInteger(concurrency) ||
+    concurrency < MIN_CONCURRENCY ||
+    concurrency > MAX_CONCURRENCY
+  ) {
+    throw new ConfigError(
+      `concurrency must be an integer between ${MIN_CONCURRENCY} and ${MAX_CONCURRENCY}.`,
+    );
+  }
 
   return {
     targets,
@@ -383,5 +496,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<SsrWi
     maxBytes,
     maxRedirects,
     repeat,
+    concurrency,
+    waivers: normalizeWaivers(file.ignore, targets, agents),
   };
 }

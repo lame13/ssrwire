@@ -5,7 +5,7 @@ import { runAudit } from "./audit.js";
 import { AuditReportError, parseAuditReportText } from "./audit-report.js";
 import { compareAudits } from "./compare.js";
 import { renderComparisonReport } from "./comparison-reporters.js";
-import { ConfigError, loadConfig } from "./config.js";
+import { ConfigError, loadConfig, type SitemapTarget } from "./config.js";
 import {
   detectFrameworkFromProbes,
   detectProjectFramework,
@@ -14,7 +14,8 @@ import {
   frameworkLabel,
   isFrameworkKey,
 } from "./framework.js";
-import { renderReport } from "./reporters.js";
+import { renderJson, renderReport } from "./reporters.js";
+import { assignTargetIds, discoverSitemapTargets, targetIdFromUrl } from "./sitemap.js";
 import type { AuditResult, ComparisonReportFormat, ReportFormat } from "./types.js";
 import { VERSION } from "./version.js";
 
@@ -26,6 +27,13 @@ interface CliOptions {
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
   readonly repeat?: number;
+  readonly concurrency?: number;
+  readonly sitemap?: string;
+  readonly sitemapInclude: readonly string[];
+  readonly sitemapExclude: readonly string[];
+  readonly sitemapLimit?: number;
+  readonly baseline?: string;
+  readonly updateBaseline?: boolean;
   readonly format: ReportFormat;
   readonly output?: string;
   readonly failOn: "error" | "warning" | "never";
@@ -66,6 +74,14 @@ timeoutMs: 15000
 maxBytes: 10485760
 maxRedirects: 10
 repeat: 1
+concurrency: 4
+
+# Waive a finding you have accepted, with a reason and an optional expiry date.
+# ignore:
+#   - code: missing-description
+#     target: home
+#     reason: tracked in SEO-1487
+#     until: 2026-12-31
 
 # Keep preview credentials in environment variables. SSRWire redacts configured values from reports.
 # headers:
@@ -85,10 +101,20 @@ function parseInteger(value: string): number {
 }
 
 function parseFormat(value: string): ReportFormat {
-  if (value === "terminal" || value === "json" || value === "sarif" || value === "html") {
+  if (
+    value === "terminal" ||
+    value === "json" ||
+    value === "sarif" ||
+    value === "html" ||
+    value === "junit" ||
+    value === "markdown" ||
+    value === "github"
+  ) {
     return value;
   }
-  throw new InvalidArgumentError("Expected terminal, json, sarif, or html.");
+  throw new InvalidArgumentError(
+    "Expected terminal, json, sarif, html, junit, markdown, or github.",
+  );
 }
 
 function parseFrameworkOption(value: string): string {
@@ -107,8 +133,16 @@ function parseFailOn(value: string): CliOptions["failOn"] {
 }
 
 function parseComparisonFormat(value: string): ComparisonReportFormat {
-  if (value === "terminal" || value === "json" || value === "html") return value;
-  throw new InvalidArgumentError("Expected terminal, json, or html.");
+  if (
+    value === "terminal" ||
+    value === "json" ||
+    value === "html" ||
+    value === "markdown" ||
+    value === "github"
+  ) {
+    return value;
+  }
+  throw new InvalidArgumentError("Expected terminal, json, html, markdown, or github.");
 }
 
 function parseComparisonFailOn(value: string): CompareCliOptions["failOn"] {
@@ -133,7 +167,29 @@ function addCheckOptions(command: Command): Command {
     .option("--max-bytes <bytes>", "maximum response bytes", parseInteger)
     .option("--max-redirects <count>", "maximum redirects", parseInteger)
     .option("--repeat <count>", "sequential samples per URL and agent", parseInteger)
-    .option("-f, --format <format>", "terminal, json, sarif, or html", parseFormat, "terminal")
+    .option("--concurrency <count>", "parallel probes, 1-16", parseInteger)
+    .option("--sitemap <source>", "discover targets from a sitemap URL or local file")
+    .option(
+      "--sitemap-include <glob>",
+      "only keep sitemap paths matching this glob; repeatable",
+      collect,
+      [],
+    )
+    .option(
+      "--sitemap-exclude <glob>",
+      "drop sitemap paths matching this glob; repeatable",
+      collect,
+      [],
+    )
+    .option("--sitemap-limit <count>", "maximum page URLs to take from the sitemap", parseInteger)
+    .option("--baseline <path>", "compare this run against a stored JSON baseline")
+    .option("--update-baseline", "write this run to the --baseline path instead of comparing")
+    .option(
+      "-f, --format <format>",
+      "terminal, json, sarif, html, junit, markdown, or github",
+      parseFormat,
+      "terminal",
+    )
     .option("-o, --output <path>", "write the report to a file")
     .option("--fail-on <level>", "error, warning, or never", parseFailOn, "error")
     .option(
@@ -184,6 +240,76 @@ async function readAuditFile(path: string, label: string): Promise<AuditResult> 
   return parseAuditReportText(text, `${label} audit report`);
 }
 
+const DEFAULT_BASELINE_PATH = "ssrwire.baseline.json";
+
+async function resolveSitemapTargets(
+  options: CliOptions,
+): Promise<readonly SitemapTarget[] | undefined> {
+  if (options.sitemap === undefined) {
+    return undefined;
+  }
+  const discovery = await discoverSitemapTargets(options.sitemap, {
+    ...(options.sitemapLimit === undefined ? {} : { limit: options.sitemapLimit }),
+    include: options.sitemapInclude,
+    exclude: options.sitemapExclude,
+  });
+  for (const error of discovery.errors) {
+    process.stderr.write(`SSRWire: ${error}\n`);
+  }
+  if (discovery.truncated) {
+    process.stderr.write(
+      `SSRWire: stopped sitemap discovery at a URL or document limit after ${discovery.urls.length} ` +
+        "URL(s). Raise --sitemap-limit or audit a child sitemap separately.\n",
+    );
+  }
+  const ids = assignTargetIds(discovery.urls);
+  return discovery.urls.map((url) => ({ url, id: ids.get(url) ?? targetIdFromUrl(url) }));
+}
+
+/**
+ * Apply the baseline contract for this run.
+ *
+ * `--update-baseline` records the current run; otherwise an existing baseline is compared against
+ * it. The comparison is written to stderr so stdout keeps exactly one machine-readable report.
+ */
+async function applyBaseline(
+  audit: AuditResult,
+  options: CliOptions,
+  baseline?: AuditResult,
+): Promise<number> {
+  if (options.baseline === undefined && options.updateBaseline !== true) {
+    return 0;
+  }
+  const path = options.baseline ?? DEFAULT_BASELINE_PATH;
+
+  if (options.updateBaseline === true) {
+    if (audit.summary.incomplete > 0) {
+      process.stderr.write(
+        "SSRWire: baseline was not updated because the audit has incomplete probes.\n",
+      );
+      return 2;
+    }
+    await writeReport(path, renderJson(audit));
+    process.stderr.write(`SSRWire wrote the new baseline to ${path}\n`);
+    return 0;
+  }
+
+  if (baseline === undefined) throw new AuditReportError("No baseline report was loaded.");
+  const comparison = compareAudits(baseline, audit, {
+    baselineLabel: basename(path),
+    candidateLabel: "current run",
+  });
+  process.stderr.write(renderComparisonReport(comparison, "terminal", { color: false }));
+  const failed = options.failOn !== "never" && comparison.summary.regressions > 0;
+  if (failed) {
+    process.stderr.write(
+      `SSRWire: ${comparison.summary.regressions} regression(s) against ${path}. ` +
+        `Re-run with --update-baseline once the change is intended.\n`,
+    );
+  }
+  return failed ? 1 : 0;
+}
+
 /**
  * Decide which stack the fix recipes should describe.
  *
@@ -213,15 +339,31 @@ async function resolveFramework(
 }
 
 async function check(urls: readonly string[], options: CliOptions): Promise<void> {
+  const baselinePath =
+    options.baseline ?? (options.updateBaseline ? DEFAULT_BASELINE_PATH : undefined);
+  if (
+    baselinePath !== undefined &&
+    options.output !== undefined &&
+    resolve(baselinePath) === resolve(options.output)
+  ) {
+    throw new ConfigError("--output and --baseline must use different paths.");
+  }
+  const baseline =
+    baselinePath !== undefined && options.updateBaseline !== true
+      ? await readAuditFile(baselinePath, "baseline")
+      : undefined;
+  const discovered = await resolveSitemapTargets(options);
   const config = await loadConfig({
     ...(options.config ? { configPath: options.config } : {}),
     urls,
+    ...(discovered === undefined ? {} : { discovered }),
     agents: options.agent,
     headers: options.header,
     ...(options.timeout === undefined ? {} : { timeoutMs: options.timeout }),
     ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
     ...(options.maxRedirects === undefined ? {} : { maxRedirects: options.maxRedirects }),
     ...(options.repeat === undefined ? {} : { repeat: options.repeat }),
+    ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
   });
   const audit = await runAudit(config);
   const framework =
@@ -231,11 +373,12 @@ async function check(urls: readonly string[], options: CliOptions): Promise<void
     !options.output &&
     Boolean(process.stdout.isTTY) &&
     !Reflect.has(process.env, "NO_COLOR");
-  const exitCode = reportExitCode(audit.summary, options.failOn);
+  const baselineCode = await applyBaseline(audit, options, baseline);
+  const reportCode = Math.max(reportExitCode(audit.summary, options.failOn), baselineCode);
   const report = renderReport(audit, options.format, {
     color,
     ...(framework === undefined ? {} : { framework }),
-    policy: { failOn: options.failOn, exitCode },
+    policy: { failOn: options.failOn, exitCode: reportCode },
   });
 
   if (options.output) {
@@ -245,7 +388,7 @@ async function check(urls: readonly string[], options: CliOptions): Promise<void
     process.stdout.write(report);
   }
 
-  process.exitCode = exitCode;
+  process.exitCode = reportCode;
 }
 
 async function compareReports(
@@ -320,7 +463,12 @@ export async function main(argv: readonly string[] = process.argv): Promise<void
     .description("compare two SSRWire JSON audit reports")
     .argument("<baseline>", "baseline JSON audit report")
     .argument("<candidate>", "candidate JSON audit report")
-    .option("-f, --format <format>", "terminal, json, or html", parseComparisonFormat, "terminal")
+    .option(
+      "-f, --format <format>",
+      "terminal, json, html, markdown, or github",
+      parseComparisonFormat,
+      "terminal",
+    )
     .option("-o, --output <path>", "write the comparison to a file")
     .option("--fail-on <level>", "regression or never", parseComparisonFailOn, "regression")
     .option(

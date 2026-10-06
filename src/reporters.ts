@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { renderGithub, renderJunit, renderMarkdown } from "./ci-reporters.js";
 import { nextSteps, targetVerdict } from "./explain.js";
 import type { FrameworkDetection } from "./framework.js";
 import { type AuditPolicyOutcome, renderAuditHtml } from "./html-report.js";
@@ -284,7 +285,8 @@ export function renderTerminal(audit: AuditResult, options: ReporterOptions = {}
   const summaryText =
     `Summary: ${summary.targets} target(s), ${summary.probes} probe(s), ` +
     `${summary.errors} error(s), ${summary.warnings} warning(s), ` +
-    `${summary.info} info, ${summary.incomplete} incomplete`;
+    `${summary.info} info, ${summary.incomplete} incomplete` +
+    (summary.waived === undefined || summary.waived === 0 ? "" : `, ${summary.waived} waived`);
   const summaryColor =
     summary.errors > 0 ? ANSI.red : summary.warnings > 0 ? ANSI.yellow : ANSI.blue;
   lines.push("", paint(summaryText, summaryColor, color));
@@ -431,6 +433,15 @@ export function renderReport(
       ...(options.framework === undefined ? {} : { framework: options.framework }),
       ...(options.policy === undefined ? {} : { policy: options.policy }),
     });
+  }
+  if (format === "junit") {
+    return renderJunit(audit);
+  }
+  if (format === "markdown") {
+    return renderMarkdown(audit);
+  }
+  if (format === "github") {
+    return renderGithub(audit);
   }
 
   const exhaustive: never = format;

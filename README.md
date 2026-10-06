@@ -17,9 +17,8 @@ executing JavaScript.
 npx ssrwire https://example.com/product
 ```
 
-Add `--format html` when the result has to be read by someone who does not live in a terminal: the
-report states a verdict, explains each finding in plain language, and suggests a fix for the stack
-that answered.
+Add `--format html --output ssrwire.html` for a shareable report with findings, timing evidence,
+and suggested fixes.
 
 ## Why this exists
 
@@ -90,6 +89,34 @@ npx ssrwire check \
 The root command and `check` are equivalent, so `npx ssrwire URL` is the short
 form of `npx ssrwire check URL`.
 
+## Check a whole site
+
+Point SSRWire at a sitemap instead of listing URLs by hand:
+
+```bash
+npx ssrwire check --sitemap https://example.com/sitemap.xml
+npx ssrwire check --sitemap ./public/sitemap.xml \
+  --sitemap-include '/products/*' \
+  --sitemap-exclude '/products/archive/*' \
+  --sitemap-limit 200
+```
+
+`--sitemap` accepts an HTTP(S) URL or a local path, including a gzipped `.gz` file. Remote indexes
+and redirects stay on the source origin. Local indexes may name remote child sitemaps.
+An unreadable child is reported on stderr; URLs from readable children are kept.
+Discovery stops at `--sitemap-limit` (default 100) or 20 sitemap requests. Each document has a
+10 MiB limit, including decompressed gzip content. HTTP requests time out after 15 seconds.
+
+Each discovered URL gets a stable id derived from its path, so `https://www.example.com/pricing/`
+and `https://preview.example.net/pricing/` both become `pricing` and match in `ssrwire compare`.
+Paths that produce the same id get a path/query hash suffix; keep explicit ids if the set of
+colliding routes changes between deployments. Explicit configuration and CLI targets take
+precedence over the sitemap entry for the same URL.
+
+A large sitemap multiplies the request count, so `--concurrency` (1–16, default 4) bounds how many
+probes run at once. SSRWire adds no delays or cache-busting parameters: respect the `crawl-delay`
+and rate limits of any site you point it at.
+
 ## Compare deployments
 
 SSRWire can compare two JSON audits without making more network requests. Give
@@ -147,7 +174,57 @@ does not create or update baseline files automatically.
 Reports without target IDs match by exact target URL. IDs must be unique within
 one report, so an ID mismatch is shown as one removed and one added target
 instead of being guessed. Comparison requires the explicit `schemaVersion: 1`
-audit contract emitted by SSRWire 0.4.0 and later.
+audit contract emitted by SSRWire 0.4.0–0.5.0, or `schemaVersion: 2` written by SSRWire 0.6.0.
+Reports from either version can be compared with each other.
+
+## Baselines
+
+Keep a baseline in the repository to check each deployment against an accepted audit:
+
+```bash
+# Record the current output as the baseline to compare against from now on.
+npx ssrwire check --format json --baseline ssrwire.baseline.json --update-baseline
+
+# Later runs compare automatically and fail on a regression.
+npx ssrwire check --baseline ssrwire.baseline.json --fail-on error
+```
+
+`--baseline <path>` reads a stored JSON audit, compares this run against it with the same
+classification rules as `ssrwire compare`, and exits `1` when a regression appears (unless
+`--fail-on never`). `--update-baseline` writes the current run to that path instead of comparing;
+without `--baseline` it defaults to `ssrwire.baseline.json`. The comparison is printed to stderr so
+stdout keeps exactly one machine-readable report. Incomplete audits do not replace a baseline,
+and `--output` must use a different path from `--baseline`.
+
+Review baseline updates like other JSON changes. SSRWire only writes a baseline when you pass
+`--update-baseline`.
+
+## Waivers
+
+Some findings are known, accepted, and tracked elsewhere. Record them instead of ignoring the whole
+check:
+
+```yaml
+ignore:
+  - code: missing-description
+    target: home
+    reason: tracked in SEO-1487
+    until: 2026-12-31
+  - code: robots-txt-disallowed
+    agent: gptbot
+    reason: AI crawlers are opted out by policy
+```
+
+A waiver matches on `code` (or `*`), and optionally narrows by `target` (a target id or an exact
+URL) and `agent`. A nonblank `reason` is required. Waived findings are excluded from severity
+counts and policy failures. Reports retain the configured waivers and `summary.waived` count;
+they do not retain the suppressed findings. An incomplete probe still exits `2`, even if its
+finding is waived. Select `gptbot` in `agents` to use the second example above.
+
+After `until` passes, the waiver stops suppressing findings and produces a `waiver-expired`
+warning. A waiver that suppresses nothing produces a `waiver-unused` note. Dates are inclusive
+and use UTC: a waiver dated today still applies. Unknown target and agent references are rejected
+when configuration loads.
 
 ## Readable reports
 
@@ -180,8 +257,7 @@ The preview card prints the Open Graph and Twitter Card values captured from the
 the image URL as text. SSRWire does not fetch or render the image, so the report stays a single
 offline file with no requests of its own.
 
-Terminal output gains the same plain-language reading: a verdict line for every target and a short
-"What to do" list of distinct fixes ordered by severity.
+Terminal output includes a result for each target and a "What to do" list ordered by severity.
 
 ## What it observes
 
@@ -191,6 +267,9 @@ For each target, agent, and configured sample, SSRWire captures:
   includes `X-Robots-Tag`, cache, and framework headers;
 - time to response headers, first response-body bytes, and completed body;
 - total bytes delivered to the stream parser and a body fingerprint;
+- how the body arrived, in client-observed chunks: chunk count, streamed span, longest gap
+  between chunks, and total idle time;
+- the robots.txt verdict for that profile and origin, when robots.txt could be read;
 - title, meta description, canonical, meta robots, Open Graph, Twitter Card,
   H1, first main-content text, and JSON-LD blocks;
 - elapsed arrival time, observed byte position, and `head`/`body` location for
@@ -215,6 +294,11 @@ It then checks:
 | `X-Robots-Tag` that removes the page from search results for a profile | Error |
 | `X-Robots-Tag` that restricts a profile while keeping the page indexed | Warning |
 | Permissive `X-Robots-Tag` that a meta robots tag overrides | Information |
+| robots.txt that disallows the profile's crawler | Error |
+| robots.txt disallows the crawler while meta robots still permits indexing | Warning |
+| robots.txt could not be read, so crawler access is undefined | Information |
+| A response body that ignores `Accept-Encoding: identity` | Information |
+| A waiver that has expired, or one that matched no finding | Warning / Information |
 | Status, final URL, title, canonical, robots, or enabled social metadata drift between profiles | Warning |
 | Completion, status, final URL, or redirect-chain drift between samples | Warning |
 | Metadata value or document-location drift between complete samples | Warning |
@@ -283,6 +367,31 @@ agents:
     userAgent: ExamplePreviewBot/1.0
     requiresHeadMetadata: true
 ```
+
+## robots.txt
+
+Each run reads `robots.txt` once per target origin using SSRWire's own user agent, without custom
+headers, then matches the rules against each selected profile. The evidence describes the
+requested URL, before page redirects. SSRWire still fetches disallowed pages so you can inspect
+their HTML. It does not enforce robots.txt or `crawl-delay` as a request scheduler.
+
+Matching follows the usual longest-rule-wins behaviour, where `Allow` wins an equally specific tie,
+`*` spans any characters, and a trailing `$` anchors to the end of the path. A group whose user
+agent token appears in the profile's user agent string beats the `*` group. Equally specific
+groups are combined. See the [Robots Exclusion Protocol](https://www.rfc-editor.org/rfc/rfc9309.html).
+
+Findings are reported per target and agent:
+
+- `robots-txt-disallowed` (error) — robots.txt asks the crawler not to fetch this URL;
+- `robots-txt-conflict` (warning) — robots.txt blocks the crawler while meta robots still permits
+  indexing, so the page looks indexable in source but is unreachable;
+- `robots-txt-unavailable` (information) — robots.txt answered with a server error or could not be
+  read, so crawler access is undefined rather than assumed.
+
+A 4xx response is treated as "no robots.txt" and allows everything under this audit policy.
+SSRWire matches user agent tokens as substrings of the profile's user agent string and does not
+perform crawler IP or reverse-DNS verification, so treat the verdict as the published policy rather
+than as proof of what a specific crawler will do.
 
 ## Social preview metadata
 
@@ -367,6 +476,13 @@ timeoutMs: 15000
 maxBytes: 10485760
 maxRedirects: 10
 repeat: 1
+concurrency: 4
+
+ignore:
+  - code: missing-description
+    target: home
+    reason: tracked in SEO-1487
+    until: 2026-12-31
 ```
 
 A target can also be a plain URL string when defaults are sufficient:
@@ -390,7 +506,8 @@ Defaults:
 - timeout: 15 seconds per probe;
 - response limit: 10 MiB;
 - redirect limit: 10;
-- samples per target and agent: 1, with an allowed range of 1–10.
+- samples per target and agent: 1, with an allowed range of 1–10;
+- parallel probes: 4, with an allowed range of 1–16.
 
 Unknown configuration keys are rejected. URLs must be absolute HTTP or HTTPS
 URLs and cannot contain embedded credentials. Declaring one URL twice with
@@ -471,7 +588,8 @@ target-agent pair run sequentially; different target-agent pairs may still run
 concurrently. SSRWire does not add delays, cache-busting parameters, or special
 cache headers.
 
-The request count is `targets × agents × repeat`, plus redirect hops. Configured
+The page request count is `targets × agents × repeat`, plus redirect hops. Add one robots.txt
+request per target origin and any sitemap discovery requests. Configured
 same-origin headers are sent for every sample and retain the existing
 cross-origin stripping and report-redaction behavior.
 
@@ -489,6 +607,41 @@ contracts are included in metadata stability; observed social tags remain
 evidence-only when their contracts are disabled. Exact body-hash variation by
 itself is informational because timestamps, nonces, and other legitimate
 dynamic values commonly change source HTML.
+
+## CI and test suites
+
+Beyond `terminal`, `json`, `sarif`, and `html`, `check` can write a `junit` report for CI systems
+that consume test results, `markdown` for a pull-request comment, or `github` for annotations in
+the workflow run:
+
+```bash
+npx ssrwire check --format junit --output reports/ssrwire.xml
+npx ssrwire check --format markdown --output reports/ssrwire.md
+npx ssrwire check --format github
+```
+
+JUnit has a test case per probe and an extra case for target-wide findings when needed. A case
+with errors uses `<error>`; one with warnings only uses `<failure>`. Informational findings stay
+in suite output. This mapping is independent of `--fail-on`, so a CI test-report consumer may fail
+on warnings even when the CLI exits `0`. GitHub output emits one `::error`, `::warning`, or
+`::notice` line per finding. `compare` supports `markdown` and `github` too, where regressions
+become annotations.
+
+For deployments, the comparison engine is also available as an assertion:
+
+```ts
+import { readFile } from "node:fs/promises";
+import { expectNoRegressions, loadConfig, parseAuditReportText, runAudit } from "ssrwire";
+
+const config = await loadConfig();
+const baseline = parseAuditReportText(await readFile("ssrwire.baseline.json", "utf8"));
+const candidate = await runAudit(config);
+
+expectNoRegressions(baseline, candidate);
+```
+
+`expectNoRegressions()` throws a `RegressionError` with up to five regression details and the full
+comparison on its `comparison` property. It works with any test runner.
 
 ## CLI reference
 
@@ -510,7 +663,14 @@ Check options:
 | `--max-bytes <bytes>` | Override response-body limit |
 | `--max-redirects <count>` | Override redirect limit |
 | `--repeat <count>` | Run 1–10 sequential samples per URL and agent |
-| `-f, --format <format>` | `terminal`, `json`, `sarif`, or `html` |
+| `--concurrency <count>` | Run 1–16 probes in parallel (default 4) |
+| `--sitemap <source>` | Discover targets from a sitemap URL or local file |
+| `--sitemap-include <glob>` | Keep only sitemap paths matching this glob; repeatable |
+| `--sitemap-exclude <glob>` | Drop sitemap paths matching this glob; repeatable |
+| `--sitemap-limit <count>` | Maximum page URLs taken from the sitemap (default 100) |
+| `--baseline <path>` | Compare this run against a stored JSON baseline |
+| `--update-baseline` | Write this run to the baseline path instead of comparing |
+| `-f, --format <format>` | `terminal`, `json`, `sarif`, `html`, `junit`, `markdown`, or `github` |
 | `-o, --output <path>` | Write the report to a file |
 | `--fail-on <level>` | `error`, `warning`, or `never` |
 | `--framework <name>` | Fix recipes for `auto`, `none`, or a framework name |
@@ -523,7 +683,7 @@ Comparison options:
 
 | Option | Purpose |
 |---|---|
-| `-f, --format <format>` | `terminal`, `json`, or self-contained `html` |
+| `-f, --format <format>` | `terminal`, `json`, `html`, `markdown`, or `github` |
 | `-o, --output <path>` | Write the comparison to a file |
 | `--fail-on <level>` | `regression` or `never` |
 | `--timing-regression-ms <ms>` | Absolute median slowdown floor; default `250` |
@@ -569,8 +729,8 @@ through a manual dispatch. Keep PR targets public and credential-free. If the
 main audit requires `${PREVIEW_TOKEN}`, point the PR step at a separate
 credential-free configuration or remove the PR trigger.
 
-The workflow always keeps the SARIF file as a downloadable artifact. It also
-uploads findings to Code Scanning for public repositories. Private/internal
+Trusted-branch runs keep the SARIF file as a downloadable artifact and upload findings to Code
+Scanning for public repositories. Pull requests get terminal output. Private/internal
 repositories can remove the public-only condition after GitHub Code Security is
 enabled for that repository.
 
@@ -612,8 +772,7 @@ const audit = await runAudit(config);
 process.stdout.write(renderJson(audit));
 ```
 
-Readable output and fix recipes are exported too, so a caller can reuse the human layer without
-shelling out to the CLI:
+You can also render HTML reports and look up explanations in your own code:
 
 ```ts
 import {
@@ -627,7 +786,6 @@ const framework = await detectProjectFramework(process.cwd());
 const context = framework === undefined ? {} : { framework };
 const html = renderAuditHtml(audit, {
   ...context,
-  policy: { failOn: "error", exitCode: 0 },
 });
 const steps = nextSteps(audit.results[0]?.findings ?? [], context);
 const [finding] = audit.results[0]?.findings ?? [];
@@ -666,7 +824,7 @@ offline comparison.
 ## Scope
 
 SSRWire does not execute JavaScript, inspect a hydrated DOM, render social
-previews, fetch social images, measure Core Web Vitals, discover URLs, validate
+previews, fetch social images, measure Core Web Vitals, follow page links, validate
 indexing, bypass access controls, perform load testing, or emulate a crawler's
 rendering pipeline. Use
 [RoutePlay](https://github.com/lame13/routeplay) for server HTML versus a cold

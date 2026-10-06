@@ -220,3 +220,110 @@ timeoutMs: 5000
     expect((await loadConfig({ cwd })).targets).toHaveLength(1);
   });
 });
+
+describe("waivers and concurrency", () => {
+  it("preserves explicit CLI targets ahead of sitemap duplicates", async () => {
+    const config = await loadConfig({
+      cwd: await temporaryDirectory(),
+      urls: ["https://example.com/page"],
+      discovered: [{ url: "https://example.com/page", id: "page" }],
+    });
+    expect(config.targets).toHaveLength(1);
+    expect(config.targets[0]?.id).toBeUndefined();
+  });
+
+  it("rejects an empty discovered target list", async () => {
+    await expect(loadConfig({ cwd: await temporaryDirectory(), discovered: [] })).rejects.toThrow(
+      "No target URL",
+    );
+  });
+  async function configWith(body: string) {
+    const cwd = await temporaryDirectory();
+    await writeFile(join(cwd, "ssrwire.config.yml"), body);
+    return cwd;
+  }
+
+  it("normalizes a waiver that references a configured target and agent", async () => {
+    const cwd = await configWith(`targets:
+  - id: home
+    url: https://example.com/
+agents:
+  - browser
+ignore:
+  - code: missing-description
+    target: home
+    agent: browser
+    reason: tracked in SEO-1487
+    until: 2026-12-31
+concurrency: 2
+`);
+
+    const config = await loadConfig({ cwd });
+
+    expect(config.waivers).toEqual([
+      {
+        code: "missing-description",
+        target: "home",
+        agent: "browser",
+        reason: "tracked in SEO-1487",
+        until: "2026-12-31",
+      },
+    ]);
+    expect(config.concurrency).toBe(2);
+  });
+
+  it("requires a nonblank waiver reason", async () => {
+    const cwd = await configWith(
+      'targets: [https://example.com/]\nignore:\n  - code: missing-title\n    reason: "   "\n',
+    );
+    await expect(loadConfig({ cwd })).rejects.toThrow("reason");
+  });
+
+  it("rejects a waiver that would silently never apply", async () => {
+    const cwd = await configWith(`targets:
+  - id: home
+    url: https://example.com/
+ignore:
+  - code: missing-description
+    target: pricing
+    reason: tracked in SEO-1487
+`);
+
+    await expect(loadConfig({ cwd })).rejects.toThrow(/unknown target 'pricing'/u);
+  });
+
+  it("rejects a waiver scoped to an agent that is not selected", async () => {
+    const cwd = await configWith(`targets:
+  - url: https://example.com/
+agents:
+  - browser
+ignore:
+  - code: missing-description
+    agent: googlebot
+    reason: tracked in SEO-1487
+`);
+
+    await expect(loadConfig({ cwd })).rejects.toThrow(/unknown agent 'googlebot'/u);
+  });
+
+  it("rejects a waiver dated the 31st of a short month", async () => {
+    const cwd = await configWith(`targets:
+  - url: https://example.com/
+ignore:
+  - code: missing-description
+    reason: tracked in SEO-1487
+    until: 2026-02-31
+`);
+
+    await expect(loadConfig({ cwd })).rejects.toThrow(/invalid 'until' date/u);
+  });
+
+  it("rejects a concurrency outside the supported range", async () => {
+    const cwd = await configWith(`targets:
+  - url: https://example.com/
+concurrency: 40
+`);
+
+    await expect(loadConfig({ cwd })).rejects.toThrow();
+  });
+});

@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,6 +36,19 @@ afterEach(async () => {
 });
 
 /** A page that is complete except for its canonical link, so findings are produced. */
+/**
+ * SSRWire reads /robots.txt once per origin. Fixtures that count requests answer it explicitly
+ * with a 404, which models a site that has no robots.txt at all.
+ */
+function serveNoRobots(request: IncomingMessage, response: ServerResponse): boolean {
+  if (request.url !== "/robots.txt") {
+    return false;
+  }
+  response.writeHead(404, { "content-type": "text/plain" });
+  response.end("Not found");
+  return true;
+}
+
 async function servePageWithoutCanonical(): Promise<string> {
   server = createServer((_request, response) => {
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -91,7 +104,7 @@ describe("CLI", () => {
       summary: { errors: number; incomplete: number; probes: number };
       results: Array<{ probes: Array<{ status: number }> }>;
     };
-    expect(report.schemaVersion).toBe(1);
+    expect(report.schemaVersion).toBe(2);
     expect(report.summary).toMatchObject({ errors: 0, incomplete: 0, probes: 1 });
     expect(report.results[0]?.probes[0]?.status).toBe(200);
     expect(stderr).toBe("");
@@ -160,7 +173,10 @@ describe("CLI", () => {
     await main(["node", "ssrwire", "check", "--help"]);
 
     expect(stdout).toContain("--framework <name>");
-    expect(stdout).toContain("terminal, json, sarif, or html");
+    expect(stdout).toContain("junit");
+    expect(stdout).toContain("--sitemap <source>");
+    expect(stdout).toContain("--baseline <path>");
+    expect(stdout).toContain("--concurrency <count>");
   });
 
   it("enforces social-preview contracts from strict YAML configuration", async () => {
@@ -211,7 +227,7 @@ agents: [browser]
 
   it("keeps check and comparison format and failure policies separate", async () => {
     await main(["node", "ssrwire", "https://example.com", "--format", "yaml"]);
-    expect(stderr).toContain("Expected terminal, json, sarif, or html");
+    expect(stderr).toContain("Expected terminal, json, sarif, html, junit, markdown, or github");
     expect(process.exitCode).toBe(2);
 
     stdout = "";
@@ -250,6 +266,7 @@ agents: [browser]
     let request = 0;
     let varyTitle = false;
     server = createServer((incoming, response) => {
+      if (serveNoRobots(incoming, response)) return;
       request += 1;
       const origin = `http://${incoming.headers.host}`;
       const title = varyTitle ? `SSRWire fixture ${request}` : "SSRWire fixture";
@@ -392,5 +409,352 @@ agents: [browser]
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("CLI baselines, sitemaps, and waivers", () => {
+  it("rejects output paths that would overwrite the baseline", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ssrwire-baseline-clash-"));
+    const path = join(directory, "baseline.json");
+    try {
+      await writeFile(path, "keep this baseline");
+      await main(["node", "ssrwire", "https://example.com/", "--baseline", path, "--output", path]);
+      expect(process.exitCode).toBe(2);
+      expect(stderr).toContain("different paths");
+      expect(await readFile(path, "utf8")).toBe("keep this baseline");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the existing baseline when an update has incomplete probes", async () => {
+    server = createServer((request, response) => {
+      if (serveNoRobots(request, response)) return;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Fixture server did not bind.");
+    const directory = await mkdtemp(join(tmpdir(), "ssrwire-baseline-incomplete-"));
+    const path = join(directory, "baseline.json");
+    try {
+      await writeFile(path, "keep this baseline");
+      await main([
+        "node",
+        "ssrwire",
+        `http://127.0.0.1:${address.port}/`,
+        "--agent",
+        "browser",
+        "--baseline",
+        path,
+        "--update-baseline",
+      ]);
+      expect(process.exitCode).toBe(2);
+      expect(stderr).toContain("baseline was not updated");
+      expect(await readFile(path, "utf8")).toBe("keep this baseline");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it("records a baseline, compares against it, and fails on a regression", async () => {
+    const url = await servePageWithoutCanonical();
+    const directory = await mkdtemp(join(tmpdir(), "ssrwire-cli-baseline-"));
+    const baselinePath = join(directory, "ssrwire.baseline.json");
+
+    try {
+      await main([
+        "node",
+        "ssrwire",
+        url,
+        "--agent",
+        "browser",
+        "--format",
+        "json",
+        "--baseline",
+        baselinePath,
+        "--update-baseline",
+      ]);
+
+      const stored = JSON.parse(await readFile(baselinePath, "utf8")) as {
+        schemaVersion: number;
+        results: Array<{ findings: readonly unknown[] }>;
+      };
+      expect(stored.schemaVersion).toBe(2);
+      expect(stored.results[0]?.findings.length).toBeGreaterThan(0);
+
+      // An unchanged run matches the baseline it just recorded.
+      stdout = "";
+      stderr = "";
+      process.exitCode = undefined;
+      await main([
+        "node",
+        "ssrwire",
+        url,
+        "--agent",
+        "browser",
+        "--format",
+        "json",
+        "--baseline",
+        baselinePath,
+      ]);
+      expect(stderr).toContain("0 regression");
+      expect(process.exitCode ?? 0).toBe(0);
+
+      // Rewriting the baseline without its findings turns them into regressions next run.
+      const clean = JSON.parse(await readFile(baselinePath, "utf8")) as {
+        results: Array<{ findings: readonly unknown[] }>;
+        summary: Record<string, number>;
+      };
+      clean.results[0] = { ...clean.results[0], findings: [] } as never;
+      clean.summary = { ...clean.summary, errors: 0, warnings: 0, info: 0 };
+      await writeFile(baselinePath, JSON.stringify(clean));
+
+      stdout = "";
+      stderr = "";
+      process.exitCode = undefined;
+      await main([
+        "node",
+        "ssrwire",
+        url,
+        "--agent",
+        "browser",
+        "--format",
+        "json",
+        "--baseline",
+        baselinePath,
+      ]);
+
+      expect(stderr).toContain("regression(s) against");
+      expect(process.exitCode).toBe(1);
+
+      stdout = "";
+      await main([
+        "node",
+        "ssrwire",
+        url,
+        "--agent",
+        "browser",
+        "--format",
+        "html",
+        "--baseline",
+        baselinePath,
+      ]);
+      expect(stdout).toContain("exit code 1");
+      expect(process.exitCode).toBe(1);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("discovers targets from a sitemap and derives their ids from the path", async () => {
+    server = createServer((request, response) => {
+      if (serveNoRobots(request, response)) return;
+      const origin = `http://${request.headers.host}`;
+      if (request.url === "/sitemap.xml") {
+        response.writeHead(200, { "content-type": "application/xml" });
+        response.end(
+          `<?xml version="1.0" encoding="UTF-8"?><urlset>` +
+            `<url><loc>${origin}/alpha</loc></url>` +
+            `<url><loc>${origin}/beta</loc></url>` +
+            `</urlset>`,
+        );
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        `<!doctype html><html><head><title>Fixture</title>` +
+          `<meta name="description" content="Fixture page">` +
+          `<link rel="canonical" href="${origin}${request.url}"></head>` +
+          "<body><main><h1>Fixture</h1><p>Content.</p></main></body></html>",
+      );
+    });
+    await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Fixture server did not bind.");
+    const origin = `http://127.0.0.1:${address.port}`;
+
+    await main([
+      "node",
+      "ssrwire",
+      "check",
+      "--sitemap",
+      `${origin}/sitemap.xml`,
+      "--agent",
+      "browser",
+      "--format",
+      "json",
+    ]);
+
+    const report = JSON.parse(stdout) as {
+      results: Array<{ target: { id?: string; url: string } }>;
+    };
+    expect(report.results.map((entry) => entry.target.id)).toEqual(["alpha", "beta"]);
+    expect(report.results.map((entry) => entry.target.url)).toEqual([
+      `${origin}/alpha`,
+      `${origin}/beta`,
+    ]);
+  });
+
+  it("honours --sitemap-exclude and reports the reduced target set", async () => {
+    server = createServer((request, response) => {
+      if (serveNoRobots(request, response)) return;
+      const origin = `http://${request.headers.host}`;
+      if (request.url === "/sitemap.xml") {
+        response.writeHead(200, { "content-type": "application/xml" });
+        response.end(
+          `<?xml version="1.0" encoding="UTF-8"?><urlset>` +
+            `<url><loc>${origin}/keep</loc></url>` +
+            `<url><loc>${origin}/draft/one</loc></url>` +
+            `</urlset>`,
+        );
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        `<!doctype html><html><head><title>Fixture</title>` +
+          `<meta name="description" content="Fixture page">` +
+          `<link rel="canonical" href="${origin}${request.url}"></head>` +
+          "<body><main><h1>Fixture</h1><p>Content.</p></main></body></html>",
+      );
+    });
+    await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Fixture server did not bind.");
+    const origin = `http://127.0.0.1:${address.port}`;
+
+    await main([
+      "node",
+      "ssrwire",
+      "check",
+      "--sitemap",
+      `${origin}/sitemap.xml`,
+      "--sitemap-exclude",
+      "/draft/*",
+      "--agent",
+      "browser",
+      "--format",
+      "json",
+    ]);
+
+    const report = JSON.parse(stdout) as { results: Array<{ target: { id?: string } }> };
+    expect(report.results.map((entry) => entry.target.id)).toEqual(["keep"]);
+  });
+
+  it("keeps waived findings out of the exit code and reports the count", async () => {
+    const url = await servePageWithoutCanonical();
+    const directory = await mkdtemp(join(tmpdir(), "ssrwire-cli-waiver-"));
+    const configPath = join(directory, "ssrwire.config.yml");
+    const base = `targets:
+  - id: fixture
+    url: ${url}
+agents:
+  - browser
+`;
+    await writeFile(configPath, base);
+
+    try {
+      // Without the waiver the warning is a failure under --fail-on warning.
+      await main([
+        "node",
+        "ssrwire",
+        "check",
+        "--config",
+        configPath,
+        "--format",
+        "json",
+        "--fail-on",
+        "warning",
+      ]);
+      expect(process.exitCode ?? 0).toBe(1);
+
+      await writeFile(
+        configPath,
+        `${base}ignore:
+  - code: missing-canonical
+    target: fixture
+    reason: canonical is injected by the edge
+`,
+      );
+
+      stdout = "";
+      stderr = "";
+      process.exitCode = undefined;
+      await main([
+        "node",
+        "ssrwire",
+        "check",
+        "--config",
+        configPath,
+        "--format",
+        "json",
+        "--fail-on",
+        "warning",
+      ]);
+      const report = JSON.parse(stdout) as {
+        summary: { waived?: number; warnings: number };
+        waivers: readonly { code: string; reason: string }[];
+      };
+      expect(report.summary.waived).toBe(1);
+      expect(report.summary.warnings).toBe(0);
+      expect(report.waivers[0]).toMatchObject({
+        code: "missing-canonical",
+        reason: "canonical is injected by the edge",
+      });
+      expect(process.exitCode ?? 0).toBe(0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a waiver that no longer matches anything", async () => {
+    const url = await serveHealthyPage();
+    const directory = await mkdtemp(join(tmpdir(), "ssrwire-cli-stale-waiver-"));
+    const configPath = join(directory, "ssrwire.config.yml");
+    await writeFile(
+      configPath,
+      `targets:
+  - id: fixture
+    url: ${url}
+agents:
+  - browser
+ignore:
+  - code: missing-canonical
+    target: fixture
+    reason: canonical is injected by the edge
+`,
+    );
+
+    try {
+      await main(["node", "ssrwire", "check", "--config", configPath, "--format", "json"]);
+      const report = JSON.parse(stdout) as {
+        results: Array<{ findings: readonly { code: string; severity: string }[] }>;
+      };
+
+      expect(report.results[0]?.findings).toContainEqual(
+        expect.objectContaining({ code: "waiver-unused", severity: "info" }),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("emits Markdown, JUnit, and GitHub annotation reports", async () => {
+    const url = await servePageWithoutCanonical();
+
+    await main(["node", "ssrwire", url, "--agent", "browser", "--format", "markdown"]);
+    expect(stdout).toContain("## SSRWire");
+    expect(stdout).toContain("missing-canonical");
+
+    stdout = "";
+    process.exitCode = undefined;
+    await main(["node", "ssrwire", url, "--agent", "browser", "--format", "junit"]);
+    expect(stdout).toContain("<testsuites");
+    expect(stdout).toContain("<failure");
+
+    stdout = "";
+    process.exitCode = undefined;
+    await main(["node", "ssrwire", url, "--agent", "browser", "--format", "github"]);
+    expect(stdout).toContain("::warning title=");
   });
 });
