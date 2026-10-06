@@ -1,171 +1,130 @@
-# Publish SSRWire from a local machine
+# Publish SSRWire
 
-This repository intentionally includes no npm publishing workflow. Publish from
-a foreground local terminal only after the GitHub `CI` workflow passes. Do not
-configure an `NPM_TOKEN`, trusted publisher, OIDC identity, or automated npm
-release job.
+Releases go through a pull request to protected `main`. npm publication is manual, from a local
+terminal after GitHub CI passes. Keep publishing credentials out of GitHub Actions.
 
-The `main` branch is protected. Land every release change through a pull
-request, and do not use an administrator bypass or a direct push to `main`.
+Replace `<VERSION>` below with the release version, such as `0.6.0`.
 
-Replace `<VERSION>` with the version being released (for example `0.4.2`) and
-`<PREVIOUS_VERSION>` with the version npm currently reports as `latest` before
-running any command in this document. `CHANGELOG.md` is updated as part of the
-release commit.
+## Prepare the release
 
-## 1. Bump every version reference
-
-The package version lives in more than one place. Update all of them:
-
-| File | What to change |
-|---|---|
-| `package.json` | the top-level `version` |
-| `package-lock.json` | the top-level `version` and `packages[""].version` |
-| `scripts/package-check.mjs` | the `expectedVersion` constant |
-| `examples/github-actions.yml` | both `npx --yes ssrwire@<VERSION>` pins |
-| `README.md` | release-pinned examples; preserve historical compatibility versions |
-| `test/` | fixture versions and reporter assertions that embed the version |
-| `CHANGELOG.md` | the new `## [<VERSION>]` entry and the compare links |
-
-Then confirm no reference to the previous release is left behind. Historical
-`CHANGELOG.md` entries are excluded intentionally:
+Start a release branch from current `main`, then make the release changes:
 
 ```bash
-rg "SSRWire <PREVIOUS_VERSION>|ssrwire@<PREVIOUS_VERSION>|expectedVersion = \"<PREVIOUS_VERSION>\"" \
-  README.md examples scripts src test
-```
-
-## 2. Update the existing repository
-
-Work from a clean clone of the existing public repository. Copy the release
-source files into that clone while preserving its `.git` directory.
-
-```bash
-cd ssrwire
 git switch main
 git pull --ff-only origin main
-git status --short
 git switch -c release/<VERSION>
 ```
 
-`git status --short` must be empty before creating the release branch and
-applying the release files.
+Update the version in `package.json`, both root entries in `package-lock.json`,
+`scripts/package-check.mjs`, and the pins in `examples/github-actions.yml`. Add a dated entry and
+compare link to `CHANGELOG.md`. Keep historical versions in compatibility examples and old report
+fixtures.
 
-## 3. Verify the release locally
+Use Node.js 22.12.0 or newer (CI also tests Node 24):
 
 ```bash
-nvm use 24
-node --version
-npm --version
 npm ci
 npm run check
 npm pack --dry-run
 node dist/bin.js --version
-```
-
-The final command must print `<VERSION>`. Inspect the dry-run file list. It must
-not contain `.env`, `.github`, `node_modules`, `test`, ZIP files, or tarballs.
-
-Review the release diff and version references:
-
-```bash
 git diff --check
 git diff --stat
-git diff -- package.json package-lock.json CHANGELOG.md README.md PUBLISHING.md
 ```
 
-## 4. Commit, push the release branch, and open a pull request
+Inspect the tarball file list and confirm the CLI prints the release version. Stage only the
+release files, review the staged diff, and commit:
 
 ```bash
-gh auth status -h github.com || gh auth login -h github.com --web
-git add --all
 git diff --cached --check
 git diff --cached --stat
 git commit -m "chore: release SSRWire <VERSION>"
+```
+
+Create an annotated tag on that commit. Put the release's changelog entry in the annotation so
+GitHub can use it as the release notes:
+
+```bash
+git tag -a v<VERSION> --cleanup=verbatim
+```
+
+If the release commit and tag have already been prepared, continue below without recreating them.
+
+## Publish the branch and merge the pull request
+
+```bash
 git push --set-upstream origin release/<VERSION>
 gh pr create --base main --head release/<VERSION> --fill
-PR_NUMBER="$(gh pr view release/<VERSION> --json number --jq .number)"
-test -n "$PR_NUMBER"
-gh pr checks "$PR_NUMBER" --watch --fail-fast
+gh pr checks release/<VERSION> --watch --fail-fast
 ```
 
-Do not merge while any Node, package-smoke, or Docker job is failing. Satisfy
-all review and branch-protection requirements, then merge with GitHub's allowed
-strategy. Running `gh pr merge "$PR_NUMBER"` without a strategy flag lets the
-CLI prompt for one of the repository's permitted methods. Do not select an
-administrator bypass.
+After all required checks and reviews pass, use a merge commit to preserve the tagged release
+commit:
 
 ```bash
-gh pr merge "$PR_NUMBER"
-```
-
-After GitHub reports the pull request as merged, update local `main` and wait
-for the CI run on the exact merged commit:
-
-```bash
+gh pr merge release/<VERSION> --merge
 git switch main
 git pull --ff-only origin main
-git status --short
-gh pr view "$PR_NUMBER" --json state,mergedAt,mergeCommit
-COMMIT_SHA="$(git rev-parse HEAD)"
-RUN_ID="$(gh run list --workflow CI --branch main --commit "$COMMIT_SHA" \
-  --limit 1 --json databaseId --jq '.[0].databaseId')"
-test -n "$RUN_ID"
-gh run watch "$RUN_ID" --exit-status
+git merge-base --is-ancestor v<VERSION> HEAD
+git diff --exit-code v<VERSION> HEAD
 ```
 
-`git status --short` must be empty. Do not publish until the merged-commit CI
-run succeeds.
+The last two commands confirm that `main` contains the tagged commit and has the same files. If
+review changed the release files, verify the new files and update the unpublished local tag before
+continuing. Never move a published tag.
 
-## 5. Verify npm state
+Wait for CI on the merged commit:
 
 ```bash
-npm view ssrwire version dist-tags homepage keywords repository.url --json
-npm config get registry
-npm config get provenance
+RELEASE_COMMIT="$(git rev-parse HEAD)"
+gh run list --workflow CI --branch main --commit "$RELEASE_COMMIT"
+gh run watch <RUN_ID> --exit-status
 ```
 
-The published version and `latest` tag must still be `<PREVIOUS_VERSION>`. If
-npm already reports `<VERSION>`, stop: never reuse a version that npm accepted.
+Use the run ID from the listing. If it has not appeared yet, wait for GitHub to start it.
 
-In the npm package settings, select **Require two-factor authentication and
-disallow tokens**. npm documents this as the strongest package publishing
-setting:
+## Publish to npm
 
-- <https://docs.npmjs.com/requiring-2fa-for-package-publishing-and-settings-modification/>
-- <https://docs.npmjs.com/about-two-factor-authentication/>
+Publish the exact tagged source from a clean working tree:
 
-## 6. Publish interactively
+```bash
+git status --short
+git switch --detach v<VERSION>
+npm ci
+npm run check
+npm pack --dry-run
+npm view ssrwire version dist-tags --json
+npm view ssrwire@<VERSION> version
+```
 
-Remove inherited automation credentials before starting the interactive
-session:
+The working tree must be clean. The final lookup should report that the version is not published;
+if it exists, do not publish it again. A network error does not establish that a version is free.
+
+In npm package settings, use **Require two-factor authentication and disallow tokens**. Start an
+interactive session:
 
 ```bash
 unset NODE_AUTH_TOKEN NPM_TOKEN NPM_CONFIG_OTP npm_config_otp
 npm login --auth-type=web --registry=https://registry.npmjs.org
 npm whoami --registry=https://registry.npmjs.org
 npm publish --access public --registry=https://registry.npmjs.org
-npm view ssrwire version dist-tags homepage keywords repository.url --json
+npm view ssrwire@<VERSION> version dist.integrity --json
 npm logout --registry=https://registry.npmjs.org
 ```
 
-Complete npm's browser, passkey, or two-factor-authentication challenge when
-prompted. Do not use a token with bypass 2FA, put an OTP in a command argument,
-or add an npm credential to the repository or GitHub Actions. The package-level
-"disallow tokens" setting ensures that publication remains interactive.
+Complete npm's browser or two-factor authentication prompt. Do not put an OTP in a command or add
+an npm token to the repository. If visibility is delayed after a successful publish, wait rather
+than publishing again.
 
-If npm's publish-time scanning delays package visibility, wait. Do not publish
-`<VERSION>` again or change the tag to work around propagation.
+See [npm publish](https://docs.npmjs.com/cli/v11/commands/npm-publish/) and
+[npm's package 2FA settings](https://docs.npmjs.com/requiring-2fa-for-package-publishing-and-settings-modification/).
 
-## 7. Tag the exact published commit
+## Publish the GitHub tag and release
 
 ```bash
-node scripts/clean.mjs
-rm -rf node_modules/.vite
-git status --short
-git tag -a v<VERSION> -m "SSRWire v<VERSION>"
 git push origin v<VERSION>
-gh release create v<VERSION> --generate-notes --title "SSRWire v<VERSION>"
+gh release create v<VERSION> --verify-tag --notes-from-tag --title "SSRWire v<VERSION>"
+git switch main
 ```
 
-`git status --short` must print nothing before tagging.
+`--notes-from-tag` uses the reviewed annotation. See the
+[GitHub CLI release reference](https://cli.github.com/manual/gh_release_create).

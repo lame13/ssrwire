@@ -39,8 +39,9 @@ maxBytes: 10485760
 maxRedirects: 10
 
 # Run each target-agent pair sequentially three times to expose intermittent SSR output.
-# Total requests are targets × agents × repeat, plus redirects.
+# Page requests are targets × agents × repeat, plus redirects and one robots.txt per origin.
 repeat: 3
+concurrency: 4
 
 # Keep preview credentials in a CI secret or exported environment variable.
 # headers:

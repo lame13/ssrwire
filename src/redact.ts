@@ -135,6 +135,20 @@ function redactProbeWithPlan(probe: ProbeResult, plan: RedactionPlan): ProbeResu
       ),
     },
     signals: redactSignals(probe.signals, plan),
+    ...(probe.robotsTxt === undefined
+      ? {}
+      : {
+          robotsTxt: {
+            ...probe.robotsTxt,
+            url: redactText(probe.robotsTxt.url, plan),
+            ...(probe.robotsTxt.matched === undefined
+              ? {}
+              : { matched: redactText(probe.robotsTxt.matched, plan) }),
+            ...(probe.robotsTxt.error === undefined
+              ? {}
+              : { error: redactText(probe.robotsTxt.error, plan) }),
+          },
+        }),
     ...(probe.error === undefined ? {} : { error: redactText(probe.error, plan) }),
   };
 }
@@ -153,6 +167,15 @@ export function redactAudit(audit: AuditResult, secrets: readonly string[]): Aud
   if (plan.exact.size === 0) return audit;
   return {
     ...audit,
+    ...(audit.waivers === undefined
+      ? {}
+      : {
+          waivers: audit.waivers.map((waiver) => ({
+            ...waiver,
+            reason: redactText(waiver.reason, plan),
+            ...(waiver.target === undefined ? {} : { target: redactText(waiver.target, plan) }),
+          })),
+        }),
     results: audit.results.map((result) => ({
       target: {
         ...result.target,

@@ -832,6 +832,90 @@ function checkAgentDrift(
   }
 }
 
+/**
+ * Report what robots.txt means for this profile.
+ *
+ * A disallowed URL is an error on its own, and it is called out again when the document still
+ * advertises `index` for that crawler, because the page then looks indexable in view-source while
+ * being unreachable to the crawler that would have indexed it.
+ */
+function checkRobotsTxt(findings: Finding[], target: AuditTarget, probe: ProbeResult): void {
+  const evidence = probe.robotsTxt;
+  if (evidence === undefined) {
+    return;
+  }
+
+  if (evidence.verdict === "unavailable") {
+    addFinding(findings, target.url, {
+      code: "robots-txt-unavailable",
+      severity: "info",
+      message:
+        `SSRWire could not read robots.txt (${evidence.error ?? "unknown reason"}); ` +
+        `access rules for ${probe.agent.label} could not be checked.`,
+      agent: probe.agent.key,
+      evidence: {
+        robotsTxtUrl: evidence.url,
+        ...(evidence.status === undefined ? {} : { status: evidence.status }),
+        ...(evidence.error === undefined ? {} : { error: evidence.error }),
+      },
+    });
+    return;
+  }
+
+  if (evidence.verdict !== "disallowed") {
+    return;
+  }
+
+  addFinding(findings, target.url, {
+    code: "robots-txt-disallowed",
+    severity: "error",
+    message: `${probe.agent.label} is disallowed from this URL by robots.txt.`,
+    agent: probe.agent.key,
+    evidence: {
+      robotsTxtUrl: evidence.url,
+      ...(evidence.matched === undefined ? {} : { matched: evidence.matched }),
+    },
+  });
+
+  const directives = normalizedRobotsDirectives(effectiveRobotsSignals(probe));
+  if (!directives.has("noindex") && !directives.has("none")) {
+    addFinding(findings, target.url, {
+      code: "robots-txt-conflict",
+      severity: "warning",
+      message:
+        `${probe.agent.label} is blocked by robots.txt while meta robots still permits ` +
+        "indexing, so the page looks indexable in source but cannot be fetched.",
+      agent: probe.agent.key,
+      evidence: {
+        robotsTxtUrl: evidence.url,
+        effective: "robots.txt disallow with permissive meta robots",
+      },
+    });
+  }
+}
+
+/**
+ * Record when a server ignores SSRWire's `Accept-Encoding: identity` request.
+ *
+ * Byte positions in the report are measured after content decoding, so a compressed response
+ * silently changes what those offsets mean. Nothing else in the report would reveal it.
+ */
+function checkContentEncoding(findings: Finding[], target: AuditTarget, probe: ProbeResult): void {
+  const encoding = probe.headers.values["content-encoding"]?.trim().toLowerCase();
+  if (encoding === undefined || encoding.length === 0 || encoding === "identity") {
+    return;
+  }
+  addFinding(findings, target.url, {
+    code: "content-encoding-ignored",
+    severity: "info",
+    message:
+      `${probe.agent.label} received a ${encoding}-encoded body after requesting identity ` +
+      "encoding, so byte positions are post-decoding offsets.",
+    agent: probe.agent.key,
+    evidence: { contentEncoding: encoding },
+  });
+}
+
 export function analyzeTarget(
   target: AuditTarget,
   probes: readonly ProbeResult[],
@@ -901,6 +985,8 @@ export function analyzeTarget(
     checkRepeatedMetadata(findings, target.url, probe, "canonical", probe.signals.canonicals);
     checkRepeatedRobots(findings, target.url, probe);
     checkRobotsHeader(findings, target, probe);
+    checkRobotsTxt(findings, target, probe);
+    checkContentEncoding(findings, target, probe);
     checkSocialMetadata(findings, target, probe);
 
     const invalidJsonLd = probe.signals.jsonLd.filter((signal) => signal.valid === false);
@@ -942,7 +1028,7 @@ export function analyzeTarget(
   return findings;
 }
 
-export function summarizeAudit(results: readonly TargetAuditResult[]): AuditSummary {
+export function summarizeAudit(results: readonly TargetAuditResult[], waived = 0): AuditSummary {
   let errors = 0;
   let warnings = 0;
   let info = 0;
@@ -970,5 +1056,6 @@ export function summarizeAudit(results: readonly TargetAuditResult[]): AuditSumm
     warnings,
     info,
     incomplete,
+    waived,
   };
 }

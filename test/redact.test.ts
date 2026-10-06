@@ -53,7 +53,19 @@ function fixture(): ProbeResult {
 
 describe("redactProbe", () => {
   it("removes configured values and encoded forms from every captured field", () => {
-    const redacted = redactProbe(fixture(), ["Bearer very-secret-token"]);
+    const redacted = redactProbe(
+      {
+        ...fixture(),
+        robotsTxt: {
+          url: "https://very-secret-token.test/robots.txt",
+          fetched: true,
+          verdict: "disallowed",
+          matched: "Disallow: /very-secret-token",
+          error: "very-secret-token",
+        },
+      },
+      ["Bearer very-secret-token"],
+    );
     const serialized = JSON.stringify(redacted);
 
     expect(serialized).not.toContain("very-secret-token");
@@ -89,6 +101,13 @@ describe("redactProbe", () => {
     const probe = fixture();
     const audit: AuditResult = {
       schemaVersion: 1,
+      waivers: [
+        {
+          code: "missing-title",
+          reason: `Accepted for ${secret}`,
+          target: `https://example.com/${secret}`,
+        },
+      ],
       version: "0.5.0",
       generatedAt: "2026-08-22T00:00:00.000Z",
       durationMs: 1,

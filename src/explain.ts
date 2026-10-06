@@ -56,6 +56,44 @@ interface ExplanationTemplate {
 }
 
 const EXPLANATIONS: Readonly<Record<string, ExplanationTemplate>> = Object.freeze({
+  "robots-txt-disallowed": {
+    title: "robots.txt blocks this crawler",
+    means: "A matching robots.txt rule disallows the requested URL for this profile.",
+    impact:
+      "A crawler that follows this rule will skip the page. SSRWire still fetches it to inspect the response.",
+    fix: "Allow this path if the crawler should visit it. If the block is intentional, document it with a waiver.",
+  },
+  "robots-txt-conflict": {
+    title: "Crawling is blocked while the page permits indexing",
+    means: "robots.txt disallows the URL, but its HTML has no applicable noindex directive.",
+    impact:
+      "A blocked crawler cannot read the page's metadata. The URL may still appear in search results based on links elsewhere.",
+    fix: "Decide whether the page should be crawled and indexed. Allow crawling if the crawler needs to read a noindex directive.",
+  },
+  "robots-txt-unavailable": {
+    title: "robots.txt could not be checked",
+    means: "The robots.txt request failed or exceeded a limit.",
+    impact: "This audit cannot confirm the published crawl rules for the target.",
+    fix: "Check the robots.txt response and retry once it is available.",
+  },
+  "content-encoding-ignored": {
+    title: "The server compressed the response",
+    means: "The server returned compressed content despite Accept-Encoding: identity.",
+    impact: "Byte positions describe decoded HTML, so they cannot be used as transfer sizes.",
+    fix: "Use these offsets to locate HTML signals. Check the server or CDN encoding settings if you need an uncompressed response.",
+  },
+  "waiver-expired": {
+    title: "A waiver has expired",
+    means: "The waiver's until date has passed, so it no longer suppresses matching findings.",
+    impact: "The original findings count toward the audit result again.",
+    fix: "Resolve the finding and remove the waiver, or review its reason before extending the date.",
+  },
+  "waiver-unused": {
+    title: "A waiver suppressed no findings",
+    means: "This waiver was not needed in the current run.",
+    impact: "The issue may be fixed, another waiver may cover it, or this run may not exercise it.",
+    fix: "Check the waiver's scope and remove it if it is no longer needed.",
+  },
   "missing-title": {
     title: "No title in the HTML",
     means:

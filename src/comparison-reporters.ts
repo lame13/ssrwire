@@ -1,3 +1,4 @@
+import { renderComparisonGithub, renderComparisonMarkdown } from "./ci-reporters.js";
 import type {
   AuditComparison,
   ComparisonChange,
@@ -270,6 +271,8 @@ export function renderComparisonReport(
   if (format === "terminal") return renderComparisonTerminal(comparison, options);
   if (format === "json") return renderComparisonJson(comparison);
   if (format === "html") return renderComparisonHtml(comparison);
+  if (format === "markdown") return renderComparisonMarkdown(comparison);
+  if (format === "github") return renderComparisonGithub(comparison);
 
   const exhaustive: never = format;
   return exhaustive;

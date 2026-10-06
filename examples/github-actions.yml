@@ -1,5 +1,10 @@
 name: SSRWire
 
+# Commit a baseline first, or drop the --baseline lines until you have one:
+#   npx ssrwire check --config ssrwire.config.yml --format json \
+#     --baseline ssrwire.baseline.json --update-baseline
+# Refresh baselines locally with the command above, review the JSON, and commit the file.
+
 on:
   push:
     branches: [main]
@@ -27,10 +32,9 @@ jobs:
         if: github.event_name == 'pull_request'
         continue-on-error: true
         run: >-
-          npx --yes ssrwire@0.5.0 check
+          npx --yes ssrwire@0.6.0 check
           --config ssrwire.config.yml
-          --format sarif
-          --output reports/ssrwire.sarif
+          --baseline ssrwire.baseline.json
           --fail-on error
 
       - name: Run SSRWire (trusted branch)
@@ -39,11 +43,13 @@ jobs:
         continue-on-error: true
         # Swap --format sarif for --format html to publish a report people can read without a
         # terminal, or add a second job so the extra requests run only when you want them.
+        # --format github writes annotations to the workflow run; omit --output for that format.
         run: >-
-          npx --yes ssrwire@0.5.0 check
+          npx --yes ssrwire@0.6.0 check
           --config ssrwire.config.yml
           --format sarif
           --output reports/ssrwire.sarif
+          --baseline ssrwire.baseline.json
           --fail-on error
         env:
           PREVIEW_TOKEN: ${{ secrets.PREVIEW_TOKEN }}

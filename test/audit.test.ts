@@ -1,10 +1,23 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgent } from "../src/agents.js";
 import { runAudit } from "../src/audit.js";
 import type { SsrWireConfig } from "../src/types.js";
 
 let server: Server | undefined;
+
+/**
+ * SSRWire reads /robots.txt once per origin, so fixtures that count requests or branch on the
+ * user agent have to answer it. Returning 404 models a site with no robots.txt: allow everything.
+ */
+function serveNoRobots(request: IncomingMessage, response: ServerResponse): boolean {
+  if (request.url !== "/robots.txt") {
+    return false;
+  }
+  response.writeHead(404, { "content-type": "text/plain" });
+  response.end("Not found");
+  return true;
+}
 
 afterEach(async () => {
   if (!server) return;
@@ -19,6 +32,7 @@ describe("runAudit", () => {
     const secret = "preview-secret-741";
     let receivedSecret = 0;
     server = createServer((request, response) => {
+      if (serveNoRobots(request, response)) return;
       if (request.headers["x-preview-token"] === secret) receivedSecret += 1;
       const origin = `http://${request.headers.host}`;
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -76,6 +90,7 @@ describe("runAudit", () => {
     let maximumActive = 0;
     let requests = 0;
     server = createServer((request, response) => {
+      if (serveNoRobots(request, response)) return;
       requests += 1;
       active += 1;
       maximumActive = Math.max(maximumActive, active);
@@ -127,6 +142,7 @@ describe("runAudit", () => {
 
   it("coalesces the same policy finding across samples", async () => {
     server = createServer((request, response) => {
+      if (serveNoRobots(request, response)) return;
       const origin = `http://${request.headers.host}`;
       response.writeHead(200, { "content-type": "text/html" });
       response.end(
@@ -176,6 +192,7 @@ describe("runAudit", () => {
   it("reports repeat variation per agent without mislabeling it as crawler-agent drift", async () => {
     const requestsByAgent = new Map<string, number>();
     server = createServer((incoming, response) => {
+      if (serveNoRobots(incoming, response)) return;
       const userAgent = incoming.headers["user-agent"] ?? "";
       const agent = userAgent.includes("Googlebot") ? "googlebot" : "browser";
       const request = (requestsByAgent.get(agent) ?? 0) + 1;
@@ -227,6 +244,7 @@ describe("runAudit", () => {
 
   it("preserves crawler-agent drift when each agent is stable across samples", async () => {
     server = createServer((incoming, response) => {
+      if (serveNoRobots(incoming, response)) return;
       const userAgent = incoming.headers["user-agent"] ?? "";
       const title = userAgent.includes("Googlebot") ? "Google title" : "Browser title";
       const origin = `http://${incoming.headers.host}`;
@@ -278,6 +296,7 @@ describe("runAudit", () => {
 
   it("keeps repeated output ordered by target, agent, and sample", async () => {
     server = createServer((request, response) => {
+      if (serveNoRobots(request, response)) return;
       const origin = `http://${request.headers.host}`;
       response.writeHead(200, { "content-type": "text/html" });
       response.end(

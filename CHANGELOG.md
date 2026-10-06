@@ -5,6 +5,42 @@ All notable changes to SSRWire are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-06
+
+### Added
+
+- `check --sitemap <url-or-path>` reads plain or gzipped sitemaps and nested indexes, with path
+  filters, URL and download limits, and target IDs that match across deployment origins.
+- `--baseline <path>` compares an audit against saved JSON. `--update-baseline` records a new
+  baseline and refuses incomplete audits. Comparisons go to stderr to keep JSON output usable.
+- `ignore` entries waive accepted findings with a reason and optional expiry date. Reports count
+  waived findings and flag expired or unused waivers.
+- robots.txt checks for each selected profile, including matching rules and findings for blocked
+  URLs, conflicting indexing directives, and unavailable files.
+- Chunk counts, stream duration, and gaps between chunks in JSON and HTML reports.
+- An informational finding when a server compresses the response despite `Accept-Encoding:
+  identity`, explaining that byte offsets refer to decoded content.
+- JUnit XML, Markdown, and GitHub Actions annotations for audits; Markdown and annotations for
+  deployment comparisons.
+- `expectNoRegressions()` and `RegressionError` for using comparisons in test suites.
+
+### Changed
+
+- Audits now write `schemaVersion: 2`. Version-1 reports remain readable and comparable.
+- `--concurrency` and the matching configuration option limit parallel requests to 1–16
+  (default 4), including robots.txt discovery.
+
+### Fixed
+
+- Redact configured secrets from robots.txt evidence and waiver text.
+- Keep baseline files separate from report output and include baseline failures in HTML exit codes.
+- Match robots.txt query strings, encoded paths, repeated groups, and wildcard rules correctly.
+- Bound sitemap downloads and gzip expansion, count failed child requests toward discovery limits,
+  and keep colliding target IDs stable when sitemap order or deployment origins change.
+- Include target-wide findings in JUnit output, attribute sampled findings to the affected probes,
+  count failed test cases correctly, and escape report text.
+- Align CLI help, examples, and release instructions with the supported options.
+
 ## [0.5.0] - 2026-09-17
 
 ### Added
@@ -140,7 +176,8 @@ All notable changes to SSRWire are documented here. The project follows
 - Terminal, JSON, and SARIF reports with CI-safe exit codes.
 - YAML configuration, one-off URL checks, Docker support, and GitHub Actions examples.
 
-[Unreleased]: https://github.com/lame13/ssrwire/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/lame13/ssrwire/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/lame13/ssrwire/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lame13/ssrwire/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/lame13/ssrwire/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/lame13/ssrwire/compare/v0.4.0...v0.4.1

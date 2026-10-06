@@ -1,4 +1,4 @@
-import { AUDIT_SCHEMA_VERSION } from "./audit-report.js";
+import { AUDIT_SCHEMA_VERSION, SUPPORTED_AUDIT_SCHEMA_VERSIONS } from "./audit-report.js";
 import {
   effectiveTwitterCardSignal,
   firstSocialSignal,
@@ -833,11 +833,18 @@ export function compareAudits(
   candidate: AuditResult,
   options: CompareAuditOptions = {},
 ): AuditComparison {
-  if (
-    baseline.schemaVersion !== AUDIT_SCHEMA_VERSION ||
-    candidate.schemaVersion !== AUDIT_SCHEMA_VERSION
-  ) {
-    throw new ComparisonError(`Both audit reports must use schemaVersion ${AUDIT_SCHEMA_VERSION}.`);
+  // Version 1 reports stay comparable: every version-2 addition is optional evidence, so a
+  // baseline captured by an older build simply has nothing to say about the newer signals.
+  for (const [label, report] of [
+    ["Baseline", baseline],
+    ["Candidate", candidate],
+  ] as const) {
+    if (!SUPPORTED_AUDIT_SCHEMA_VERSIONS.includes(report.schemaVersion)) {
+      throw new ComparisonError(
+        `${label} report uses unsupported audit schemaVersion ${report.schemaVersion}; ` +
+          `SSRWire compares versions ${SUPPORTED_AUDIT_SCHEMA_VERSIONS.join(" and ")}.`,
+      );
+    }
   }
   const timingRegressionMs = threshold(
     options.timingRegressionMs,
