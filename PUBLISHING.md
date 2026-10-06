@@ -51,17 +51,34 @@ If the release commit and tag have already been prepared, continue below without
 
 ## Publish the branch and merge the pull request
 
+Check that the release branch still contains the latest `main` before pushing:
+
+```bash
+git fetch origin
+git merge-base --is-ancestor origin/main HEAD
+```
+
+If the second command fails, merge `origin/main` into the release branch, run `npm ci` and
+`npm run check` again, and move the unpublished local tag to the verified commit. Preserve its
+release notes. Do not move a tag that has already been pushed.
+
 ```bash
 git push --set-upstream origin release/<VERSION>
 gh pr create --base main --head release/<VERSION> --fill
-gh pr checks release/<VERSION> --watch --fail-fast
 ```
 
-After all required checks and reviews pass, use a merge commit to preserve the tagged release
-commit:
+GitHub may take a moment to register the checks. "No checks reported" is not a pass; wait and
+retry. Require both Node jobs, both package-smoke jobs, and Docker to pass. The `&&` below prevents
+the merge command from running when the check command fails:
 
 ```bash
-gh pr merge release/<VERSION> --merge
+gh pr checks release/<VERSION> --watch --fail-fast &&
+  gh pr merge release/<VERSION> --merge
+```
+
+After the merge succeeds, update local `main` and confirm it contains the tagged release:
+
+```bash
 git switch main
 git pull --ff-only origin main
 git merge-base --is-ancestor v<VERSION> HEAD

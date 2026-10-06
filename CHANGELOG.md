@@ -29,6 +29,7 @@ All notable changes to SSRWire are documented here. The project follows
 - Audits now write `schemaVersion: 2`. Version-1 reports remain readable and comparable.
 - `--concurrency` and the matching configuration option limit parallel requests to 1–16
   (default 4), including robots.txt discovery.
+- Updated development tooling to Biome 2.5.14, Node types 22.20.4, tsx 4.23.15, and Vitest 5.0.2.
 
 ### Fixed
 
